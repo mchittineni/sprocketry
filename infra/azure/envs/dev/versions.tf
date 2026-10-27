@@ -5,7 +5,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.81"
+      version = "~> 5.9"
     }
     random = {
       source  = "hashicorp/random"
@@ -13,13 +13,12 @@ terraform {
     }
   }
 
-  # State lives in Azure Blob Storage. Create the account once with scripts/bootstrap-tfstate.sh.
+  # State lives in Azure Blob Storage. scripts/bootstrap-tfstate.sh creates a uniquely named
+  # account and writes backend.hcl, so initialise with `terraform init -backend-config=backend.hcl`.
   backend "azurerm" {
-    resource_group_name  = "rg-terraform-state"
-    storage_account_name = "tfstatesprocketry"
-    container_name       = "tfstate"
-    key                  = "sprocketry/dev.tfstate"
-    use_azuread_auth     = true
+    container_name   = "tfstate"
+    key              = "sprocketry/dev.tfstate"
+    use_azuread_auth = true
   }
 }
 

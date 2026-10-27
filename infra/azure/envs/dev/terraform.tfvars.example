@@ -1,3 +1,7 @@
 subscription_id = "00000000-0000-0000-0000-000000000000"
 owner           = "you@example.com"
 location        = "uksouth"
+
+# Object IDs of everyone who runs Terraform here, including the CI service principal.
+# Yours: az ad signed-in-user show --query id -o tsv
+deployer_principal_ids = ["00000000-0000-0000-0000-000000000000"]

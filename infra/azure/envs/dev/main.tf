@@ -12,6 +12,9 @@ locals {
   }
 
   app_namespace = "sprocketry"
+
+  # A fixed list, so a plan run by CI and an apply run by you agree on the same role assignments.
+  deployers = toset(length(var.deployer_principal_ids) > 0 ? var.deployer_principal_ids : [data.azurerm_client_config.current.object_id])
 }
 
 resource "random_string" "suffix" {
@@ -45,6 +48,8 @@ module "aks" {
   acr_name            = "acr${local.unique}"
   node_vm_size        = var.node_vm_size
   node_max_count      = var.node_max_count
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  admin_principal_ids = local.deployers
   tags                = local.tags
 }
 
@@ -89,6 +94,8 @@ module "keyvault" {
   location            = var.location
   resource_group_name = azurerm_resource_group.this.name
   tags                = local.tags
+
+  secrets_officer_principal_ids = local.deployers
 
   secrets = {
     "catalog-database-url"  = module.postgres.connection_strings["catalog"]

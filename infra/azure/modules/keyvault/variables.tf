@@ -19,6 +19,11 @@ variable "secrets" {
   sensitive   = true
 }
 
+variable "secrets_officer_principal_ids" {
+  description = "Entra object IDs that can read and write secrets (whoever runs Terraform)."
+  type        = set(string)
+}
+
 variable "purge_protection_enabled" {
   description = "Enable for prod. Off in dev so the vault can be destroyed and recreated."
   type        = bool
