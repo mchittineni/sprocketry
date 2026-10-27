@@ -1,0 +1,52 @@
+name: terraform
+
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/terraform.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/terraform.yml"]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+env:
+  TF_DIR: infra/azure/envs/dev
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_owner: ${{ github.repository_owner }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - run: terraform fmt -check -recursive infra
+      - run: terraform -chdir=$TF_DIR init -backend=false -input=false
+      - run: terraform -chdir=$TF_DIR validate
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --init && tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+        working-directory: infra/azure
+
+  plan:
+    needs: validate
+    # Fork PRs cannot get an OIDC token for this repo's Azure identity.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - run: terraform -chdir=$TF_DIR init -input=false
+      - run: terraform -chdir=$TF_DIR plan -input=false -no-color -out=tfplan
+
+  # Apply is manual on purpose: run `terraform apply` locally, or add an environment with required reviewers here.

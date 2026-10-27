@@ -1,0 +1,98 @@
+name: services
+
+on:
+  pull_request:
+    paths: ["services/**", ".github/workflows/services.yml"]
+  push:
+    branches: [main]
+    paths: ["services/**", ".github/workflows/services.yml"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC login to Azure, no stored credentials
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            storefront: services/storefront/**
+            catalog: services/catalog/**
+            cart: services/cart/**
+            shipping: services/shipping/**
+            payment: services/payment/**
+            fulfillment: services/fulfillment/**
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- Test, per language ----------
+      - if: contains(fromJSON('["catalog","fulfillment"]'), matrix.service)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/${{ matrix.service }}/go.mod
+      - if: contains(fromJSON('["catalog","fulfillment"]'), matrix.service)
+        run: go vet ./... && go test ./...
+
+      - if: matrix.service == 'cart'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - if: matrix.service == 'cart'
+        run: dotnet build -c Release -warnaserror
+
+      - if: contains(fromJSON('["storefront","shipping"]'), matrix.service)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/${{ matrix.service }}/package-lock.json
+      - if: contains(fromJSON('["storefront","shipping"]'), matrix.service)
+        run: npm ci && npm run build
+      - if: matrix.service == 'shipping'
+        run: npm test
+
+      - if: matrix.service == 'payment'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - if: matrix.service == 'payment'
+        run: pip install ".[dev]" && pytest -q
+
+      # ---------- Image ----------
+      - uses: docker/setup-buildx-action@v3
+      - if: github.event_name == 'push'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - if: github.event_name == 'push'
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ vars.ACR_NAME }}.azurecr.io/${{ matrix.service }}:${{ github.sha }}
+            ${{ vars.ACR_NAME }}.azurecr.io/${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
