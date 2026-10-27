@@ -2,15 +2,21 @@ name: terraform
 
 on:
   pull_request:
-    paths: ["infra/**", ".github/workflows/terraform.yml"]
-  push:
-    branches: [main]
-    paths: ["infra/**", ".github/workflows/terraform.yml"]
+    paths:
+      - infra/**
+      - .github/workflows/terraform.yml
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - infra/**
+  #     - .github/workflows/terraform.yml
 
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
 
 env:
   TF_DIR: infra/azure/envs/dev
@@ -19,34 +25,87 @@ env:
   ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
   TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-  TF_VAR_owner: ${{ github.repository_owner }}
+  # Both must match terraform.tfvars, or the plan shows changes nobody made.
+  TF_VAR_owner: ${{ vars.TF_OWNER || github.repository_owner }}
+  TF_VAR_deployer_principal_ids: ${{ vars.DEPLOYER_PRINCIPAL_IDS || '[]' }}
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: 1.15.8
-      - run: terraform fmt -check -recursive infra
-      - run: terraform -chdir=$TF_DIR init -backend=false -input=false
-      - run: terraform -chdir=$TF_DIR validate
-      - uses: terraform-linters/setup-tflint@v4
-      - run: tflint --init && tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          terraform_version: 1.16.7
+
+      - name: Format Terraform Files
+        run: terraform fmt -check -recursive infra
+
+      - name: Initialize Terraform
+        run: terraform -chdir=$TF_DIR init -backend=false -input=false
+
+      - name: Validate Terraform Configuration
+        run: terraform -chdir=$TF_DIR validate
+
+      # Plans the environment against a mocked azurerm provider: no credentials, nothing created.
+      - name: Test Terraform Plan
+        run: terraform -chdir=$TF_DIR test
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+
+      - name: Run TFLint
+        run: tflint --init && tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
         working-directory: infra/azure
+
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.75.0
+          TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+        run: |
+          curl -fsSLo /tmp/trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy
+
+      - name: Scan Terraform Misconfigurations
+        run: trivy config --severity HIGH,CRITICAL --exit-code 0 infra
 
   plan:
     needs: validate
-    # Fork PRs cannot get an OIDC token for this repo's Azure identity.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.AZURE_CLIENT_ID != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: 1.15.8
-      - run: terraform -chdir=$TF_DIR init -input=false
-      - run: terraform -chdir=$TF_DIR plan -input=false -no-color -out=tfplan
+          terraform_version: 1.16.7
+          
+      - name: Configure Terraform Backend
+        env:
+          TFSTATE_RESOURCE_GROUP: ${{ vars.TFSTATE_RESOURCE_GROUP || 'rg-terraform-state' }}
+          TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+        run: |
+          terraform -chdir=$TF_DIR init -input=false \
+            -backend-config="resource_group_name=$TFSTATE_RESOURCE_GROUP" \
+            -backend-config="storage_account_name=$TFSTATE_ACCOUNT"
+      - name: Run Terraform Plan
+        run: terraform -chdir=$TF_DIR plan -input=false -no-color -out=tfplan
 
   # Apply is manual on purpose: run `terraform apply` locally, or add an environment with required reviewers here.
