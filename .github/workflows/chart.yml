@@ -1,0 +1,135 @@
+name: chart
+
+on:
+  pull_request:
+    paths:
+      - deploy/**
+      - scripts/kind-up.sh
+      - .github/workflows/chart.yml
+  # push:
+  #   branches: 
+  #     - main
+  #   paths:
+  #     - deploy/**
+  #     - scripts/kind-up.sh
+  #     - .github/workflows/chart.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  CHART: deploy/helm/sprocketry
+  HELM_VERSION: v4.3.0
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  TRIVY_VERSION: 0.75.0
+  TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSLo /tmp/kubeconform.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/kubeconform.tgz -C /usr/local/bin kubeconform
+
+      - name: Lint Chart
+        run: |
+          helm lint "$CHART" -f "$CHART/values-azure.example.yaml"
+          helm lint "$CHART" -f "$CHART/values-local.yaml"
+
+      - name: Validate Rendered Manifests
+        run: |
+          for values in values-azure.example.yaml values-local.yaml; do
+            echo "::group::$values"
+            helm template sprocketry "$CHART" -n sprocketry -f "$CHART/$values" \
+              | kubeconform -strict -summary -ignore-missing-schemas \
+                  -schema-location default \
+                  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            echo "::endgroup::"
+          done
+
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Trivy
+        run: |
+          curl -fsSLo /tmp/trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy
+
+      - name: Scan Chart Misconfigurations
+        run: |
+          trivy config --severity HIGH,CRITICAL --exit-code 0 \
+            --helm-values "$CHART/values-azure.example.yaml" "$CHART"
+
+  smoke:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install kind
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.33.0
+          install_only: true
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Deploy to kind
+        run: ./scripts/kind-up.sh
+
+      - name: Check Storefront
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/ | grep -q "Cargo Bot" && curl -fsS -o /dev/null http://localhost:8080/cart; then
+              echo "Storefront serves the catalog and cart."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Storefront did not serve the catalog within 150s." >&2
+          exit 1
+
+      - name: Dump Cluster State
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide
+          kubectl -n sprocketry describe pods
+          kubectl -n sprocketry logs --all-containers --prefix --tail=50 -l app.kubernetes.io/part-of=sprocketry
