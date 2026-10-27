@@ -53,6 +53,16 @@ variable "node_max_count" {
   default     = 3
 }
 
+variable "tenant_id" {
+  description = "Entra tenant that authenticates cluster users."
+  type        = string
+}
+
+variable "admin_principal_ids" {
+  description = "Entra object IDs granted cluster admin through Azure RBAC."
+  type        = set(string)
+}
+
 variable "tags" {
   description = "Tags applied to all resources."
   type        = map(string)

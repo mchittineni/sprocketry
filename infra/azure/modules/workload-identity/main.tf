@@ -16,10 +16,9 @@ resource "azurerm_federated_identity_credential" "this" {
       ]
     ]) : "${pair.identity}/${pair.sa}" => pair
   }
-  name                = "${each.value.namespace}-${each.value.sa}"
-  resource_group_name = var.resource_group_name
-  parent_id           = azurerm_user_assigned_identity.this[each.value.identity].id
-  audience            = ["api://AzureADTokenExchange"]
-  issuer              = var.oidc_issuer_url
-  subject             = "system:serviceaccount:${each.value.namespace}:${each.value.sa}"
+  name                      = "${each.value.namespace}-${each.value.sa}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.this[each.value.identity].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = var.oidc_issuer_url
+  subject                   = "system:serviceaccount:${each.value.namespace}:${each.value.sa}"
 }

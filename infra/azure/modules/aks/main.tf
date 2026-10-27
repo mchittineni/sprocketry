@@ -11,6 +11,18 @@ resource "azurerm_kubernetes_cluster" "this" {
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
 
+  # Sign-in goes through Entra ID and permissions through Azure RBAC; there is no shared admin kubeconfig.
+  local_account_disabled = true
+  azure_active_directory_role_based_access_control {
+    tenant_id          = var.tenant_id
+    azure_rbac_enabled = true
+  }
+
+  # Node pools are defined here and scaled by the cluster autoscaler, not auto-provisioned by AKS.
+  node_provisioning_profile {
+    mode = "Manual"
+  }
+
   automatic_upgrade_channel = "patch"
   node_os_upgrade_channel   = "NodeImage"
 
@@ -43,6 +55,21 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   tags = var.tags
+}
+
+# Deployers can fetch credentials (Cluster User) and administer the cluster (RBAC Cluster Admin).
+resource "azurerm_role_assignment" "cluster_user" {
+  for_each             = var.admin_principal_ids
+  scope                = azurerm_kubernetes_cluster.this.id
+  role_definition_name = "Azure Kubernetes Service Cluster User Role"
+  principal_id         = each.value
+}
+
+resource "azurerm_role_assignment" "cluster_admin" {
+  for_each             = var.admin_principal_ids
+  scope                = azurerm_kubernetes_cluster.this.id
+  role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
+  principal_id         = each.value
 }
 
 # ==================== Container Registry ====================

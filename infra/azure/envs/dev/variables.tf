@@ -37,3 +37,13 @@ variable "node_max_count" {
   type        = number
   default     = 3
 }
+
+variable "deployer_principal_ids" {
+  description = <<-EOT
+    Entra object IDs of everyone who runs Terraform for this environment: people, groups and the CI
+    service principal. They get Key Vault secret write access and AKS cluster admin. Left empty, it
+    falls back to whoever runs Terraform, which only suits one person with no CI plan.
+  EOT
+  type        = list(string)
+  default     = []
+}
