@@ -1,8 +1,7 @@
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit, Provider } from '@nestjs/common';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Pool } from 'pg';
-import { haversineKm, priceFor } from './pricing';
+import { haversineKm, priceFor } from './pricing.js';
 
 const PG_POOL = Symbol('PG_POOL');
 
@@ -32,7 +31,7 @@ export class ShippingService implements OnModuleInit, OnModuleDestroy {
 
   // The schema is idempotent, so it is safe to apply on every start.
   async onModuleInit() {
-    const schema = await readFile(join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
+    const schema = await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8');
     await this.pool.query(schema);
   }
 

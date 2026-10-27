@@ -1,8 +1,8 @@
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ShippingController } from './shipping.controller';
-import { ShippingService, pgPoolProvider } from './shipping.service';
+import { ShippingController } from './shipping.controller.js';
+import { ShippingService, pgPoolProvider } from './shipping.service.js';
 
 @Module({
   controllers: [ShippingController],
