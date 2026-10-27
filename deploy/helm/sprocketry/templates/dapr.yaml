@@ -1,0 +1,64 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: sprocketry
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.observability.otlpEndpoint }}
+  tracing:
+    samplingRate: {{ $.Values.observability.samplingRate | quote }}
+    otel:
+      endpointAddress: {{ . | quote }}
+      isSecure: false
+      protocol: grpc
+  {{- end }}
+  metric:
+    enabled: true
+{{- if eq .Values.cloud "azure" }}
+---
+# Orders topic on Azure Service Bus. Auth is the "apps" workload identity, so there are no keys.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  type: pubsub.azure.servicebus.topics
+  version: v1
+  metadata:
+    - name: namespaceName
+      value: {{ required "azure.serviceBusNamespace is required" .Values.azure.serviceBusNamespace | quote }}
+    - name: azureClientId
+      value: {{ required "azure.appsClientId is required" .Values.azure.appsClientId | quote }}
+    # Topics and subscriptions are created by Terraform.
+    - name: disableEntityManagement
+      value: "true"
+scopes: [payment, fulfillment]
+---
+# Carts on Azure Managed Redis. Credentials come from Key Vault via External Secrets.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      secretKeyRef:
+        name: {{ .Values.secretName }}
+        key: redis-host
+    - name: redisPassword
+      secretKeyRef:
+        name: {{ .Values.secretName }}
+        key: redis-password
+    - name: enableTLS
+      value: "true"
+auth:
+  secretStore: kubernetes
+scopes: [cart]
+{{- end }}

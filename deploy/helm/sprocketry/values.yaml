@@ -1,0 +1,81 @@
+# Registry the CI pipeline pushes to, e.g. acrsprocketrydevxxxxx.azurecr.io
+image:
+  registry: ghcr.io/mchittineni/sprocketry
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Cloud provider that backs the Dapr components and the secret store.
+cloud: azure
+
+azure:
+  tenantId: ""
+  keyVaultUrl: ""          # terraform output key_vault_uri
+  serviceBusNamespace: ""  # terraform output servicebus_namespace
+  appsClientId: ""         # terraform output workload_identity_client_ids["apps"]
+
+# Kubernetes Secret that External Secrets fills from Key Vault.
+secretName: sprocketry-secrets
+secretRefreshInterval: 1h
+secrets:
+  - catalog-database-url
+  - shipping-database-url
+  - redis-host
+  - redis-password
+
+observability:
+  # OTLP gRPC endpoint for Dapr sidecar traces. Empty disables tracing.
+  otlpEndpoint: ""
+  samplingRate: "1"
+
+gateway:
+  enabled: false
+  name: public
+  namespace: gateway-system
+  hostname: ""
+
+services:
+  storefront:
+    port: 3000
+    replicas: 2
+    healthPath: /api/healthz
+    public: true
+    # Next.js writes its cache here; the root filesystem is read-only.
+    writablePaths: [/app/.next/cache]
+  catalog:
+    port: 8080
+    replicas: 2
+    healthPath: /healthz
+    secretEnv:
+      DATABASE_URL: catalog-database-url
+  cart:
+    port: 8080
+    replicas: 2
+    healthPath: /healthz
+  shipping:
+    port: 8080
+    replicas: 2
+    healthPath: /healthz
+    secretEnv:
+      DATABASE_URL: shipping-database-url
+  payment:
+    port: 8080
+    replicas: 2
+    healthPath: /healthz
+    workloadIdentity: true
+    env:
+      PAYMENT_FAILURE_RATE: "0"
+      PAYMENT_DELAY_MS: "0"
+  fulfillment:
+    port: 8080
+    replicas: 1
+    healthPath: /healthz
+    workloadIdentity: true
+    env:
+      DISPATCH_MAX_DELAY_MS: "500"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

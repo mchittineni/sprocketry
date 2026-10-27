@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sprocketry
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mchittineni/sprocketry.git
+    targetRevision: main
+    path: deploy/helm/sprocketry
+    helm:
+      valueFiles:
+        - values-azure.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sprocketry
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

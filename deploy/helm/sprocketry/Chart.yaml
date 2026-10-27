@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sprocketry
+description: Cloud-native polyglot demo shop running on Dapr
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

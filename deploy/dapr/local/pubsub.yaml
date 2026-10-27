@@ -1,0 +1,12 @@
+# Local stand-in for Azure Service Bus. Same component name, so app code does not change.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: valkey:6379
+scopes: [payment, fulfillment]

@@ -1,0 +1,13 @@
+# Copy to values-azure.yaml and fill from `terraform output` in infra/azure/envs/dev.
+image:
+  registry: acrsprocketrydevxxxxx.azurecr.io
+  tag: "0.1.0"
+
+azure:
+  tenantId: "00000000-0000-0000-0000-000000000000"
+  keyVaultUrl: "https://kv-sprocketrydevxxxxx.vault.azure.net/"
+  serviceBusNamespace: "sb-sprocketrydevxxxxx.servicebus.windows.net"
+  appsClientId: "00000000-0000-0000-0000-000000000000"
+
+gateway:
+  enabled: true
