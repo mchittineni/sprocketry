@@ -25,6 +25,20 @@ export interface Order {
   shipping: number;
 }
 
+export interface Quote {
+  cityId: number;
+  city: string;
+  country: string;
+  distanceKm: number;
+  cost: number;
+}
+
+export interface Destination {
+  code: string;
+  name: string;
+  cities: { id: number; name: string }[];
+}
+
 export async function call<T>(app: string, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${DAPR}/${app}/method/${path}`, {
     cache: 'no-store',
