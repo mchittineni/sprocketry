@@ -1,0 +1,17 @@
+{{- /* A single-replica service gets no PDB: it could only block drains, not protect availability. */ -}}
+{{- range $name, $svc := .Values.services }}
+{{- if gt (int $svc.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sprocketry.labels" $ | nindent 4 }}
+spec:
+  maxUnavailable: {{ $.Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+{{- end }}
+{{- end }}

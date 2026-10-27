@@ -1,0 +1,129 @@
+{{- if eq .Values.cloud "local" }}
+{{- $pg := .Values.local.postgres }}
+# Stand-ins for the managed services, for kind or any cluster without a cloud account.
+# Data is ephemeral: it lives in emptyDir and resets when the pods restart.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secretName }}
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+stringData:
+  catalog-database-url: postgres://{{ $pg.user }}:{{ $pg.password }}@postgres:5432/catalog
+  shipping-database-url: postgres://{{ $pg.user }}:{{ $pg.password }}@postgres:5432/shipping
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  01-create-databases.sql: |
+    CREATE DATABASE catalog;
+    CREATE DATABASE shipping;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        {{- include "sprocketry.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ $pg.image }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ $pg.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ $pg.password | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", {{ $pg.user | quote }}]
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: init
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey
+  labels:
+    app.kubernetes.io/name: valkey
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: valkey
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: valkey
+        {{- include "sprocketry.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: valkey
+          image: {{ .Values.local.valkey.image }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: valkey
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- end }}
