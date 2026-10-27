@@ -1,0 +1,7 @@
+# Keep the build context to source only: local builds, caches and secrets stay out of images.
+.dockerignore
+Dockerfile
+.env*
+*.log
+bin/
+*.test
