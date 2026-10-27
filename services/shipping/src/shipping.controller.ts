@@ -1,5 +1,5 @@
 import { Controller, Get, NotFoundException, Param, ParseIntPipe } from '@nestjs/common';
-import { ShippingService } from './shipping.service';
+import { ShippingService } from './shipping.service.js';
 
 @Controller()
 export class ShippingController {
