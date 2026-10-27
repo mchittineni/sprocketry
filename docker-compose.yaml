@@ -1,0 +1,88 @@
+# Local stack: every service runs with a Dapr sidecar sharing its network namespace,
+# so services reach their sidecar on localhost:3500 exactly as they do on AKS.
+x-daprd: &daprd
+  image: daprio/daprd:${DAPR_VERSION:-1.15.4}
+  volumes:
+    - ./deploy/dapr/local:/components:ro
+  depends_on:
+    - valkey
+
+x-app-env: &app-env
+  DAPR_HTTP_PORT: "3500"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sprocketry
+      POSTGRES_PASSWORD: sprocketry
+    volumes:
+      - ./deploy/local/create-databases.sql:/docker-entrypoint-initdb.d/01-create-databases.sql:ro
+    healthcheck:
+      # TCP check: the init-time server listens on the socket only, so this waits for init to finish.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "sprocketry"]
+      interval: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+
+  storefront:
+    build: ./services/storefront
+    ports: ["3000:3000"]
+    environment: *app-env
+  storefront-dapr:
+    <<: *daprd
+    command: ["./daprd", "--app-id", "storefront", "--app-port", "3000", "--resources-path", "/components"]
+    network_mode: "service:storefront"
+
+  catalog:
+    build: ./services/catalog
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgres://sprocketry:sprocketry@postgres:5432/catalog
+    depends_on:
+      postgres: { condition: service_healthy }
+  catalog-dapr:
+    <<: *daprd
+    command: ["./daprd", "--app-id", "catalog", "--app-port", "8080", "--resources-path", "/components"]
+    network_mode: "service:catalog"
+
+  cart:
+    build: ./services/cart
+    environment: *app-env
+  cart-dapr:
+    <<: *daprd
+    command: ["./daprd", "--app-id", "cart", "--app-port", "8080", "--resources-path", "/components"]
+    network_mode: "service:cart"
+
+  shipping:
+    build: ./services/shipping
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgres://sprocketry:sprocketry@postgres:5432/shipping
+    depends_on:
+      postgres: { condition: service_healthy }
+  shipping-dapr:
+    <<: *daprd
+    command: ["./daprd", "--app-id", "shipping", "--app-port", "8080", "--resources-path", "/components"]
+    network_mode: "service:shipping"
+
+  payment:
+    build: ./services/payment
+    environment:
+      <<: *app-env
+      PAYMENT_FAILURE_RATE: ${PAYMENT_FAILURE_RATE:-0}
+      PAYMENT_DELAY_MS: ${PAYMENT_DELAY_MS:-0}
+  payment-dapr:
+    <<: *daprd
+    command: ["./daprd", "--app-id", "payment", "--app-port", "8080", "--resources-path", "/components"]
+    network_mode: "service:payment"
+
+  fulfillment:
+    build: ./services/fulfillment
+    environment: *app-env
+  fulfillment-dapr:
+    <<: *daprd
+    command: ["./daprd", "--app-id", "fulfillment", "--app-port", "8080", "--resources-path", "/components"]
+    network_mode: "service:fulfillment"

@@ -1,0 +1,31 @@
+# ==================== General ====================
+.DS_Store
+.env
+*.log
+
+# ==================== Node / TypeScript ====================
+node_modules/
+dist/
+.next/
+next-env.d.ts
+
+# ==================== Python ====================
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# ==================== .NET ====================
+bin/
+obj/
+
+# ==================== Go ====================
+/services/*/bin/
+
+# ==================== Terraform ====================
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
