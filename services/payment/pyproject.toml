@@ -2,15 +2,15 @@
 name = "payment"
 version = "0.1.0"
 description = "Checkout: charges the cart and publishes OrderPlaced events"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
+    "fastapi>=0.160",
+    "uvicorn[standard]>=0.54",
     "httpx>=0.28",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3"]
+dev = ["pytest>=9.1", "httpx2>=2.16"]
 
 [tool.setuptools]
 packages = ["payment"]
