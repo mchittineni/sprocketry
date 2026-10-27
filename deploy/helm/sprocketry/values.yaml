@@ -1,11 +1,24 @@
-# Registry the CI pipeline pushes to, e.g. acrsprocketrydevxxxxx.azurecr.io
+# Registry the CI pipeline pushes to, e.g. acrsprocketrydevxxxxx.azurecr.io.
+# image.tag is the fallback; services.<name>.tag (set by CI in values-image-tags.yaml) wins.
 image:
   registry: ghcr.io/mchittineni/sprocketry
   tag: latest
   pullPolicy: IfNotPresent
 
 # Cloud provider that backs the Dapr components and the secret store.
+# "azure" uses the managed services below; "local" runs Postgres and Valkey in the cluster (see values-local.yaml).
 cloud: azure
+
+# Only used when cloud is "local".
+local:
+  postgres:
+    image: postgres:18-alpine
+    user: sprocketry
+    password: sprocketry
+  valkey:
+    image: valkey/valkey:9.1-alpine
+  # NodePort for public services, so kind can map it to the host. Empty uses ClusterIP.
+  publicNodePort: 30080
 
 azure:
   tenantId: ""
@@ -27,6 +40,15 @@ observability:
   otlpEndpoint: ""
   samplingRate: "1"
 
+# Default-deny ingress for the namespace. App pods then accept only Dapr sidecar traffic
+# (service invocation), plus public services on their app port. Egress is not restricted.
+networkPolicy:
+  enabled: true
+
+# Services with more than one replica get a PDB, so node drains (AKS auto-upgrades) evict one pod at a time.
+podDisruptionBudget:
+  maxUnavailable: 1
+
 gateway:
   enabled: false
   name: public
@@ -45,6 +67,8 @@ services:
     port: 8080
     replicas: 2
     healthPath: /healthz
+    # Liveness uses healthPath; readiness uses readyPath when set. /readyz also checks the database.
+    readyPath: /readyz
     secretEnv:
       DATABASE_URL: catalog-database-url
   cart:

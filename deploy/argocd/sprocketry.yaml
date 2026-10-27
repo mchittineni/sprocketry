@@ -6,12 +6,15 @@ metadata:
 spec:
   project: default
   source:
+    # scripts/bootstrap-cluster.sh replaces this with your clone's origin when it applies the file.
     repoURL: https://github.com/mchittineni/sprocketry.git
     targetRevision: main
     path: deploy/helm/sprocketry
     helm:
       valueFiles:
         - values-azure.yaml
+        # CI commits each service's new image tag here, which is what makes Argo CD roll it out.
+        - values-image-tags.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: sprocketry

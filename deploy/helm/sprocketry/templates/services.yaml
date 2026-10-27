@@ -6,7 +6,7 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "sprocketry.labels" $ | nindent 4 }}
-  {{- if $svc.workloadIdentity }}
+  {{- if and $svc.workloadIdentity (eq $.Values.cloud "azure") }}
   annotations:
     azure.workload.identity/client-id: {{ required "azure.appsClientId is required" $.Values.azure.appsClientId | quote }}
   {{- end }}
@@ -28,7 +28,7 @@ spec:
       labels:
         app.kubernetes.io/name: {{ $name }}
         {{- include "sprocketry.labels" $ | nindent 8 }}
-        {{- if $svc.workloadIdentity }}
+        {{- if and $svc.workloadIdentity (eq $.Values.cloud "azure") }}
         azure.workload.identity/use: "true"
         {{- end }}
       annotations:
@@ -44,9 +44,20 @@ spec:
         runAsUser: 10001
         seccompProfile:
           type: RuntimeDefault
+      {{- if and (eq $.Values.cloud "local") $svc.secretEnv }}
+      # In-cluster Postgres starts alongside the app; wait so the app doesn't crash-loop on first boot.
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ $.Values.local.postgres.image }}
+          command: ["sh", "-c", "until pg_isready -h postgres -U {{ $.Values.local.postgres.user }}; do sleep 2; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      {{- end }}
       containers:
         - name: {{ $name }}
-          image: "{{ $.Values.image.registry }}/{{ $name }}:{{ $.Values.image.tag }}"
+          image: "{{ $.Values.image.registry }}/{{ $name }}:{{ $svc.tag | default $.Values.image.tag }}"
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           ports:
             - name: http
@@ -67,7 +78,7 @@ spec:
             {{- end }}
           readinessProbe:
             httpGet:
-              path: {{ $svc.healthPath }}
+              path: {{ $svc.readyPath | default $svc.healthPath }}
               port: http
             periodSeconds: 10
           livenessProbe:
@@ -105,10 +116,17 @@ metadata:
   labels:
     {{- include "sprocketry.labels" $ | nindent 4 }}
 spec:
+  {{- $nodePort := and (eq $.Values.cloud "local") $svc.public $.Values.local.publicNodePort }}
+  {{- if $nodePort }}
+  type: NodePort
+  {{- end }}
   selector:
     app.kubernetes.io/name: {{ $name }}
   ports:
     - name: http
       port: 80
       targetPort: http
+      {{- if $nodePort }}
+      nodePort: {{ $nodePort }}
+      {{- end }}
 {{- end }}

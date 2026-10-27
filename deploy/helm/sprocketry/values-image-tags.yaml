@@ -1,0 +1,4 @@
+# Written by CI: the promote job in .github/workflows/services.yml sets each service's tag to the
+# commit SHA it was built from, after the image is pushed. Argo CD sees the commit and rolls it out.
+# Services not listed here use image.tag from values-azure.yaml.
+services: {}

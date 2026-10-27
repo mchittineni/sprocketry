@@ -1,0 +1,16 @@
+# Values for a local cluster (kind, k3d, Docker Desktop). Used by scripts/kind-up.sh.
+cloud: local
+
+# The same image names `docker compose build` produces; kind-up.sh loads them into the cluster.
+image:
+  registry: ghcr.io/mchittineni/sprocketry
+  tag: dev
+  pullPolicy: IfNotPresent
+
+services:
+  storefront: { replicas: 1 }
+  catalog: { replicas: 1 }
+  cart: { replicas: 1 }
+  shipping: { replicas: 1 }
+  payment: { replicas: 1 }
+  fulfillment: { replicas: 1 }
