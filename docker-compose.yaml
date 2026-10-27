@@ -1,18 +1,23 @@
 # Local stack: every service runs with a Dapr sidecar sharing its network namespace,
 # so services reach their sidecar on localhost:3500 exactly as they do on AKS.
+# Image names match what CI publishes, so `make up-prebuilt` can pull instead of build.
+# Settings are read from .env (see .env.example).
+name: sprocketry
+
+# Each sidecar joins its app's network namespace, so it must be recreated with its app or it stays
+# attached to the old container. `restart: true` covers `docker compose restart <app>`; to rebuild
+# one service, use `make rebuild SVC=<app>`, which recreates the sidecar too.
 x-daprd: &daprd
-  image: daprio/daprd:${DAPR_VERSION:-1.15.4}
+  image: daprio/daprd:${DAPR_VERSION:-1.18.9}
   volumes:
     - ./deploy/dapr/local:/components:ro
-  depends_on:
-    - valkey
 
 x-app-env: &app-env
   DAPR_HTTP_PORT: "3500"
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: sprocketry
       POSTGRES_PASSWORD: sprocketry
@@ -25,19 +30,24 @@ services:
       retries: 10
 
   valkey:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:9.1-alpine
 
   storefront:
     build: ./services/storefront
-    ports: ["3000:3000"]
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/storefront:${TAG:-latest}
+    ports: ["${STOREFRONT_PORT:-3000}:3000"]
     environment: *app-env
   storefront-dapr:
     <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      storefront: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "storefront", "--app-port", "3000", "--resources-path", "/components"]
     network_mode: "service:storefront"
 
   catalog:
     build: ./services/catalog
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/catalog:${TAG:-latest}
     environment:
       <<: *app-env
       DATABASE_URL: postgres://sprocketry:sprocketry@postgres:5432/catalog
@@ -45,19 +55,27 @@ services:
       postgres: { condition: service_healthy }
   catalog-dapr:
     <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      catalog: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "catalog", "--app-port", "8080", "--resources-path", "/components"]
     network_mode: "service:catalog"
 
   cart:
     build: ./services/cart
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/cart:${TAG:-latest}
     environment: *app-env
   cart-dapr:
     <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      cart: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "cart", "--app-port", "8080", "--resources-path", "/components"]
     network_mode: "service:cart"
 
   shipping:
     build: ./services/shipping
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/shipping:${TAG:-latest}
     environment:
       <<: *app-env
       DATABASE_URL: postgres://sprocketry:sprocketry@postgres:5432/shipping
@@ -65,24 +83,37 @@ services:
       postgres: { condition: service_healthy }
   shipping-dapr:
     <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      shipping: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "shipping", "--app-port", "8080", "--resources-path", "/components"]
     network_mode: "service:shipping"
 
   payment:
     build: ./services/payment
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/payment:${TAG:-latest}
     environment:
       <<: *app-env
       PAYMENT_FAILURE_RATE: ${PAYMENT_FAILURE_RATE:-0}
       PAYMENT_DELAY_MS: ${PAYMENT_DELAY_MS:-0}
   payment-dapr:
     <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      payment: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "payment", "--app-port", "8080", "--resources-path", "/components"]
     network_mode: "service:payment"
 
   fulfillment:
     build: ./services/fulfillment
-    environment: *app-env
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/fulfillment:${TAG:-latest}
+    environment:
+      <<: *app-env
+      DISPATCH_MAX_DELAY_MS: ${DISPATCH_MAX_DELAY_MS:-500}
   fulfillment-dapr:
     <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      fulfillment: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "fulfillment", "--app-port", "8080", "--resources-path", "/components"]
     network_mode: "service:fulfillment"
