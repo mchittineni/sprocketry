@@ -60,8 +60,13 @@ jobs:
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
 
+      # --init needs the config too: it is what declares the azurerm plugin to install.
       - name: Run TFLint
-        run: tflint --init && tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # plugin download uses the GitHub API; avoids rate limits
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
         working-directory: infra/azure
 
       - name: Install Trivy
