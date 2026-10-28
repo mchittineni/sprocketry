@@ -8,6 +8,7 @@ node_modules/
 dist/
 .next/
 next-env.d.ts
+*.tsbuildinfo
 
 # ==================== Python ====================
 __pycache__/
@@ -23,6 +24,9 @@ obj/
 
 # ==================== Go ====================
 /services/*/bin/
+
+# ==================== Rust and Java ====================
+/services/*/target/
 
 # ==================== Terraform ====================
 .terraform/
