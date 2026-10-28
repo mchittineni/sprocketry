@@ -67,6 +67,27 @@ jobs:
             echo "::endgroup::"
           done
 
+  slo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate and Test SLO Rules
+        run: make slo-test
+
+      - name: Check Generated Rules Are Committed
+        run: |
+          if [ -n "$(git status --porcelain -- deploy/helm/sprocketry/files/prometheus)" ]; then
+            git status --short -- deploy/helm/sprocketry/files/prometheus
+            echo "::error::The SLO rules are out of date with deploy/slo/specs. Run 'make slo' and commit the result."
+            exit 1
+          fi
+
   scan:
     runs-on: ubuntu-latest
     permissions:
