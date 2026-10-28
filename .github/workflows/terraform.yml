@@ -48,14 +48,14 @@ jobs:
         run: terraform fmt -check -recursive infra
 
       - name: Initialize Terraform
-        run: terraform -chdir=$TF_DIR init -backend=false -input=false
+        run: terraform -chdir="$TF_DIR" init -backend=false -input=false
 
       - name: Validate Terraform Configuration
-        run: terraform -chdir=$TF_DIR validate
+        run: terraform -chdir="$TF_DIR" validate
 
       # Plans the environment against a mocked azurerm provider: no credentials, nothing created.
       - name: Test Terraform Plan
-        run: terraform -chdir=$TF_DIR test
+        run: terraform -chdir="$TF_DIR" test
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
@@ -107,10 +107,10 @@ jobs:
           TFSTATE_RESOURCE_GROUP: ${{ vars.TFSTATE_RESOURCE_GROUP || 'rg-terraform-state' }}
           TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
         run: |
-          terraform -chdir=$TF_DIR init -input=false \
+          terraform -chdir="$TF_DIR" init -input=false \
             -backend-config="resource_group_name=$TFSTATE_RESOURCE_GROUP" \
             -backend-config="storage_account_name=$TFSTATE_ACCOUNT"
       - name: Run Terraform Plan
-        run: terraform -chdir=$TF_DIR plan -input=false -no-color -out=tfplan
+        run: terraform -chdir="$TF_DIR" plan -input=false -no-color -out=tfplan
 
   # Apply is manual on purpose: run `terraform apply` locally, or add an environment with required reviewers here.
