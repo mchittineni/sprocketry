@@ -41,6 +41,26 @@ updates:
       python:
         patterns: ["*"]
 
+  - package-ecosystem: cargo
+    directory: /services/reviews
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      rust:
+        patterns: ["*"]
+
+  - package-ecosystem: maven
+    directory: /services/profile
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      java:
+        patterns: ["*"]
+
   - package-ecosystem: nuget
     directories: [/services/cart, /services/cart/tests]
     schedule:
@@ -60,6 +80,8 @@ updates:
       - /services/shipping
       - /services/payment
       - /services/fulfillment
+      - /services/reviews
+      - /services/profile
     schedule:
       interval: monthly
     cooldown:
