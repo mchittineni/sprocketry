@@ -148,12 +148,15 @@ services:
       lgtm: { condition: service_started }
 
   # Grafana with Loki (logs), Tempo (traces) and Prometheus (metrics) in one container. Sign in as admin/admin.
+  # Prometheus also evaluates the SLO rules generated from deploy/slo (`make slo`).
   lgtm:
     image: grafana/otel-lgtm:0.36.0
     ports: ["${GRAFANA_PORT:-3001}:3000"]
     volumes:
       - ./deploy/observability/grafana-dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/sprocketry.yaml:ro
       - ./deploy/helm/sprocketry/files/dashboards:/otel-lgtm/sprocketry-dashboards:ro
+      - ./deploy/helm/sprocketry/files/prometheus/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+      - ./deploy/helm/sprocketry/files/prometheus/rules:/otel-lgtm/sprocketry-rules:ro
 
 volumes:
   otelcol-state:
