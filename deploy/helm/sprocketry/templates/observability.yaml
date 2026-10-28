@@ -241,6 +241,7 @@ spec:
 # Grafana with Loki, Tempo and Prometheus in one pod, for a dev cluster. Data lives in the pod and is
 # lost when it restarts; point observability.collector.exportEndpoint at a managed backend instead
 # for anything longer-lived. Reach Grafana with `make grafana` (admin/admin).
+# Prometheus evaluates the SLO rules generated from deploy/slo (`make slo`).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -262,6 +263,7 @@ spec:
         {{- include "sprocketry.labels" . | nindent 8 }}
       annotations:
         checksum/dashboards: {{ .Files.Glob "files/dashboards/*.json" | toString | sha256sum }}
+        checksum/prometheus: {{ .Files.Glob "files/prometheus/**.yaml" | toString | sha256sum }}
     spec:
       securityContext:
         runAsNonRoot: true
@@ -296,6 +298,11 @@ spec:
               subPath: sprocketry.yaml
               readOnly: true
             - { name: dashboards, mountPath: /otel-lgtm/sprocketry-dashboards, readOnly: true }
+            - name: prometheus-config
+              mountPath: /otel-lgtm/prometheus.yaml
+              subPath: prometheus.yaml
+              readOnly: true
+            - { name: prometheus-rules, mountPath: /otel-lgtm/sprocketry-rules, readOnly: true }
       volumes:
         - { name: tmp, emptyDir: {} }
         - { name: data, emptyDir: {} }
@@ -311,6 +318,32 @@ spec:
               {{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
               - { key: {{ base $path }}, path: {{ base $path }} }
               {{- end }}
+        - name: prometheus-config
+          configMap:
+            name: lgtm-prometheus
+            items: [{ key: prometheus.yaml, path: prometheus.yaml }]
+        - name: prometheus-rules
+          configMap:
+            name: lgtm-prometheus
+            items:
+              {{- range $path, $_ := .Files.Glob "files/prometheus/rules/*.yaml" }}
+              - { key: {{ printf "rules-%s" (base $path) }}, path: {{ base $path }} }
+              {{- end }}
+---
+# Prometheus configuration and the generated SLO recording and alerting rules.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lgtm-prometheus
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  prometheus.yaml: |
+    {{- .Files.Get "files/prometheus/prometheus.yaml" | nindent 4 }}
+  {{- range $path, $_ := .Files.Glob "files/prometheus/rules/*.yaml" }}
+  {{ printf "rules-%s" (base $path) }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
