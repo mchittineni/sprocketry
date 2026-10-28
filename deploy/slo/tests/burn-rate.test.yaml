@@ -1,0 +1,160 @@
+# promtool unit tests for the generated SLO rules (`make slo-test`). Series are per-minute counter
+# samples: "0+60x120" means 60 more requests every minute for two hours.
+rule_files:
+  - ../../helm/sprocketry/files/prometheus/rules/*.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # PAYMENT_FAILURE_RATE=0.2: a fifth of checkouts fail, a 40x burn. Both alerts fire.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_completed_count_total{app_id="payment",method="POST",status="200"}
+        values: 0+48x60
+      - series: dapr_http_client_completed_count_total{app_id="payment",method="POST",status="500"}
+        values: 0+12x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AvailabilityBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              owner: sprocketry
+              severity: page
+              sloth_severity: page
+              sloth_id: payment-requests-availability
+              sloth_service: payment
+              sloth_slo: requests-availability
+            exp_annotations:
+              summary: payment is spending its availability error budget too fast
+              title: (page) payment requests-availability SLO error budget burn rate is too fast.
+          - exp_labels:
+              owner: sprocketry
+              severity: ticket
+              sloth_severity: ticket
+              sloth_id: payment-requests-availability
+              sloth_service: payment
+              sloth_slo: requests-availability
+            exp_annotations:
+              summary: payment is spending its availability error budget too fast
+              title: (ticket) payment requests-availability SLO error budget burn rate is too fast.
+    promql_expr_test:
+      - expr: round(slo:current_burn_rate:ratio{sloth_id="payment-requests-availability"})
+        eval_time: 30m
+        exp_samples:
+          - labels: '{owner="sprocketry",sloth_id="payment-requests-availability",sloth_service="payment",sloth_slo="requests-availability",sloth_window="5m"}'
+            value: 40
+
+  # A healthy service with 4xx answers spends no budget.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_completed_count_total{app_id="cart",method="GET",status="200"}
+        values: 0+600x120
+      - series: dapr_http_client_completed_count_total{app_id="cart",method="POST",status="409"}
+        values: 0+30x120
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: AvailabilityBudgetBurn
+        exp_alerts: []
+
+  # Three days of clean traffic, then catalog fails every request for three minutes. The 5m window
+  # sees it, but it is 5% of the last hour, short of the 7.2% the fast page needs. Nobody is woken up.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_completed_count_total{app_id="catalog",method="GET",status="200"}
+        values: 0+600x4320 2592000x5
+      - series: dapr_http_client_completed_count_total{app_id="catalog",method="GET",status="500"}
+        values: 0x4320 600+600x2 1800x2
+    alert_rule_test:
+      - eval_time: 3d4m
+        alertname: AvailabilityBudgetBurn
+        exp_alerts: []
+    promql_expr_test:
+      # The spike is visible: most of the last five minutes failed.
+      - expr: count(slo:sli_error:ratio_rate5m{sloth_id="catalog-requests-availability"} > 0.5)
+        eval_time: 3d4m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # Cart fails 1% of requests for a day: a 2x burn. Too slow to page, but it raises a ticket.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_completed_count_total{app_id="cart",method="GET",status="200"}
+        values: 0+594x1440
+      - series: dapr_http_client_completed_count_total{app_id="cart",method="GET",status="500"}
+        values: 0+6x1440
+    alert_rule_test:
+      - eval_time: 1d
+        alertname: AvailabilityBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              owner: sprocketry
+              severity: ticket
+              sloth_severity: ticket
+              sloth_id: cart-requests-availability
+              sloth_service: cart
+              sloth_slo: requests-availability
+            exp_annotations:
+              summary: cart is spending its availability error budget too fast
+              title: (ticket) cart requests-availability SLO error budget burn rate is too fast.
+
+  # PAYMENT_DELAY_MS=1500: every checkout takes longer than the 1s threshold.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_roundtrip_latency_bucket{app_id="payment",le="1000"}
+        values: 0x60
+      - series: dapr_http_client_roundtrip_latency_bucket{app_id="payment",le="+Inf"}
+        values: 0+60x60
+      - series: dapr_http_client_roundtrip_latency_count{app_id="payment"}
+        values: 0+60x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LatencyBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              owner: sprocketry
+              severity: page
+              sloth_severity: page
+              sloth_id: payment-requests-latency
+              sloth_service: payment
+              sloth_slo: requests-latency
+            exp_annotations:
+              summary: payment is spending its latency error budget too fast
+              title: (page) payment requests-latency SLO error budget burn rate is too fast.
+          - exp_labels:
+              owner: sprocketry
+              severity: ticket
+              sloth_severity: ticket
+              sloth_id: payment-requests-latency
+              sloth_service: payment
+              sloth_slo: requests-latency
+            exp_annotations:
+              summary: payment is spending its latency error budget too fast
+              title: (ticket) payment requests-latency SLO error budget burn rate is too fast.
+
+  # Catalog answers well inside 250ms: no latency budget spent.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_roundtrip_latency_bucket{app_id="catalog",le="250"}
+        values: 0+600x120
+      - series: dapr_http_client_roundtrip_latency_bucket{app_id="catalog",le="+Inf"}
+        values: 0+600x120
+      - series: dapr_http_client_roundtrip_latency_count{app_id="catalog"}
+        values: 0+600x120
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LatencyBudgetBurn
+        exp_alerts: []
+
+  # Cart is idle for 20 minutes between two busy periods. The idle windows must not turn the 30-day
+  # SLI into NaN (0/0), or the error budget would read NaN for a month.
+  - interval: 1m
+    input_series:
+      - series: dapr_http_client_completed_count_total{app_id="cart",method="GET",status="200"}
+        values: 0+60x30 1800x20 1800+60x30
+    promql_expr_test:
+      - expr: count(slo:sli_error:ratio_rate30d{sloth_id="cart-requests-availability"} == 0)
+        eval_time: 80m
+        exp_samples:
+          - labels: '{}'
+            value: 1

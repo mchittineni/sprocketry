@@ -1,0 +1,44 @@
+# payment SLOs, in Sloth's prometheus/v1 format (https://sloth.dev). `make slo` generates the
+# Prometheus rules in deploy/helm/sprocketry/files/prometheus/rules/payment.yaml from this file.
+# How the SLIs, targets and alerts work: README, "SLOs and alerts".
+# Every total_query ends in "> 0": a window without traffic then records nothing rather than 0/0 = NaN,
+# which would otherwise turn the 30-day SLI and error budget into NaN for a month.
+version: prometheus/v1
+service: payment
+labels:
+  owner: sprocketry
+slos:
+  - name: requests-availability
+    objective: 99.5
+    description: Checkouts succeed. PAYMENT_FAILURE_RATE spends this budget on purpose.
+    sli:
+      events:
+        error_query: (sum(rate(dapr_http_client_completed_count_total{app_id="payment",status=~"5.."}[{{.window}}])) or vector(0))
+        total_query: sum(rate(dapr_http_client_completed_count_total{app_id="payment"}[{{.window}}])) > 0
+    alerting:
+      name: AvailabilityBudgetBurn
+      annotations:
+        summary: payment is spending its availability error budget too fast
+      page_alert:
+        labels: { severity: page }
+      ticket_alert:
+        labels: { severity: ticket }
+  - name: requests-latency
+    objective: 99
+    description: >-
+      Checkouts complete within 1s, including the calls payment makes to cart, catalog and shipping.
+      PAYMENT_DELAY_MS spends this budget on purpose.
+    sli:
+      events:
+        error_query: >-
+          sum(rate(dapr_http_client_roundtrip_latency_count{app_id="payment"}[{{.window}}]))
+          - sum(rate(dapr_http_client_roundtrip_latency_bucket{app_id="payment",le="1000"}[{{.window}}]))
+        total_query: sum(rate(dapr_http_client_roundtrip_latency_count{app_id="payment"}[{{.window}}])) > 0
+    alerting:
+      name: LatencyBudgetBurn
+      annotations:
+        summary: payment is spending its latency error budget too fast
+      page_alert:
+        labels: { severity: page }
+      ticket_alert:
+        labels: { severity: ticket }
