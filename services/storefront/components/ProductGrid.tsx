@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo, useState, useTransition, type CSSProperties } from 'react';
 import { addToCart } from '@/app/actions';
 import type { Product } from '@/lib/api';
@@ -83,7 +84,7 @@ function ProductCard({ product: p }: { product: Product }) {
             <span className="stock">In stock</span>
           )}
         </div>
-        <h3>{p.name}</h3>
+        <h3><Link href={`/products/${encodeURIComponent(p.sku)}`} className="product-name-link">{p.name}</Link></h3>
         <p className="muted">{p.description}</p>
       </div>
       <div className="product-foot depth-2">
@@ -94,7 +95,7 @@ function ProductCard({ product: p }: { product: Product }) {
   );
 }
 
-function AddButton({ sku, name, disabled }: { sku: string; name: string; disabled: boolean }) {
+export function AddButton({ sku, name, disabled }: { sku: string; name: string; disabled: boolean }) {
   const [pending, start] = useTransition();
   const [added, setAdded] = useState(false);
   const toast = useToast();

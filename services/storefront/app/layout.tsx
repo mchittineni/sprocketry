@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { Nunito_Sans, Rubik } from 'next/font/google';
 import { call, cartId, type Cart } from '@/lib/api';
+import { authEnabled, getSession } from '@/lib/auth';
 import { Icon } from '@/components/Icon';
 import { ToastProvider } from '@/components/Toast';
 import './globals.css';
@@ -22,8 +23,17 @@ async function cartCount(): Promise<number> {
   }
 }
 
+// Like the cart count, the header must render even when the session store is unreachable.
+async function shopperName(): Promise<string | null> {
+  try {
+    return (await getSession())?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const count = await cartCount();
+  const [count, name] = await Promise.all([cartCount(), shopperName()]);
   return (
     <html lang="en" className={`${heading.variable} ${body.variable}`}>
       <body>
@@ -34,11 +44,21 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               <span className="brand-mark" aria-hidden="true" />
               Sprocketry
             </Link>
+            <nav className="header-actions" aria-label="Account">
+              {authEnabled() && (name ? (
+                <>
+                  <Link href="/account" className="account-link">{name}</Link>
+                  <a href="/auth/logout" className="muted">Sign out</a>
+                </>
+              ) : (
+                <a href="/auth/login" className="account-link">Sign in</a>
+              ))}
             <Link href="/cart" className="cart-link" aria-label={`Cart, ${count} ${count === 1 ? 'item' : 'items'}`}>
               <Icon name="cart" size={22} />
               <span className="cart-label">Cart</span>
               {count > 0 && <span key={count} className="badge" aria-hidden="true">{count}</span>}
             </Link>
+            </nav>
           </header>
           <main id="main">{children}</main>
           <footer className="site-footer muted">

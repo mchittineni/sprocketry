@@ -8,7 +8,11 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
-const { addToCart, checkout, getQuote, setQuantity } = await import('./actions');
+const session = { sub: 'user-1', name: 'Ada', accessToken: 'token-abc', expiresAt: 0 };
+const getSession = vi.fn(async (): Promise<typeof session | null> => null);
+vi.mock('@/lib/auth', () => ({ getSession: () => getSession(), authEnabled: () => true }));
+
+const { addToCart, checkout, getQuote, postReview, saveProfile, setQuantity } = await import('./actions');
 
 // Answers every Dapr call with the given status and body, and records the requests.
 function backend(status: number, body: unknown = {}) {
@@ -25,7 +29,10 @@ function form(fields: Record<string, string>) {
   return data;
 }
 
-beforeEach(() => vi.spyOn(console, 'error').mockImplementation(() => {}));
+beforeEach(() => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  getSession.mockResolvedValue(null);
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('addToCart', () => {
@@ -95,5 +102,79 @@ describe('checkout', () => {
   it('asks the shopper to update the cart when stock ran out', async () => {
     backend(409, '{"detail":"out of stock: RB-004"}');
     expect((await checkout({}, form({ city: '1' }))).error).toMatch(/sold out.*update your cart/);
+  });
+});
+
+describe('checkout as a signed-in shopper', () => {
+  it('records the order against the shopper rather than the cart', async () => {
+    getSession.mockResolvedValue(session);
+    const fetch = backend(200, { order_id: 'o1', total: 1, shipping: 1 });
+    await expect(checkout({}, form({ city: '1' }))).rejects.toThrow('NEXT_REDIRECT');
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).user_id).toBe('user-1');
+  });
+});
+
+describe('postReview', () => {
+  const review = (fields: Record<string, string>) => postReview('RB-001', {}, form(fields));
+
+  it('asks a signed-out shopper to sign in, without calling the service', async () => {
+    const fetch = backend(201);
+    expect(await review({ rating: '5', body: 'Great' })).toEqual({ ok: false, message: 'Sign in to write a review.' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('forwards the access token to the reviews service', async () => {
+    getSession.mockResolvedValue(session);
+    const fetch = backend(201, {});
+    expect((await review({ rating: '4', body: ' Solid ' })).ok).toBe(true);
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toMatch(/\/invoke\/reviews\/method\/products\/RB-001\/reviews$/);
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer token-abc');
+    expect(JSON.parse(String(init?.body))).toEqual({ rating: 4, body: 'Solid' });
+  });
+
+  it.each([
+    [{ rating: '0', body: 'x' }, 'Choose a rating from 1 to 5 stars.'],
+    [{ rating: '5', body: '   ' }, 'Write between 1 and 2000 characters.'],
+  ])('rejects %o before calling the service', async (fields, message) => {
+    getSession.mockResolvedValue(session);
+    const fetch = backend(201);
+    expect(await review(fields)).toEqual({ ok: false, message });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [409, 'You have already reviewed this robot.'],
+    [401, 'Sign in to write a review.'],
+    [500, 'Something went wrong. Please try again.'],
+  ])('explains a %i from the service', async (code, message) => {
+    getSession.mockResolvedValue(session);
+    backend(code, 'nope');
+    expect(await review({ rating: '5', body: 'x' })).toEqual({ ok: false, message });
+  });
+});
+
+describe('saveProfile', () => {
+  it('saves the name and default city', async () => {
+    getSession.mockResolvedValue(session);
+    const fetch = backend(200, {});
+    expect(await saveProfile({}, form({ displayName: ' Ada ', city: '3' }))).toEqual({ ok: true, message: 'Saved.' });
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toMatch(/\/invoke\/profile\/method\/me$/);
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ displayName: 'Ada', defaultCityId: 3 });
+  });
+
+  it('clears the default city when none is chosen', async () => {
+    getSession.mockResolvedValue(session);
+    const fetch = backend(200, {});
+    await saveProfile({}, form({ displayName: 'Ada', city: '' }));
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).defaultCityId).toBeNull();
+  });
+
+  it('explains an unknown city', async () => {
+    getSession.mockResolvedValue(session);
+    backend(400, '{"error":"unknown city"}');
+    expect(await saveProfile({}, form({ displayName: 'Ada', city: '99' }))).toEqual({ ok: false, message: 'Choose a city from the list.' });
   });
 });

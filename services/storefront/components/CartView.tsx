@@ -14,15 +14,20 @@ export function CartView({
   cart,
   destinations,
   categories,
+  defaultCityId = null,
+  initialQuote = null,
 }: {
   cart: Cart;
   destinations: Destination[];
   categories: Record<string, string>;
+  /** The signed-in shopper's saved city, preselected with its quote. */
+  defaultCityId?: number | null;
+  initialQuote?: Quote | null;
 }) {
   const [state, action, paying] = useActionState<CheckoutState, FormData>(checkout, {});
   const [, startPay] = useTransition();
-  const [city, setCity] = useState('');
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [city, setCity] = useState(defaultCityId ? String(defaultCityId) : '');
+  const [quote, setQuote] = useState<Quote | null>(initialQuote);
   const [quoting, startQuote] = useTransition();
   const count = cart.items.reduce((n, i) => n + i.quantity, 0);
 
