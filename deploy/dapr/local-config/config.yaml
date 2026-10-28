@@ -1,0 +1,15 @@
+# Sidecar configuration for the local stack: every sidecar sends traces to the OpenTelemetry Collector.
+# Kept apart from deploy/dapr/local, which daprd loads as components.
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: sprocketry
+spec:
+  tracing:
+    samplingRate: "1"
+    otel:
+      endpointAddress: otel-collector:4317
+      isSecure: false
+      protocol: grpc
+  metric:
+    enabled: true
