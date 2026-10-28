@@ -84,7 +84,9 @@ make down
 To change ports, image source or the fault-injection knobs, copy [.env.example](.env.example) to `.env` and edit it.
 For example, `PAYMENT_FAILURE_RATE=0.2` makes 20% of checkouts fail.
 
-`make test` needs Go, .NET, Node and Python installed. `make test-docker` runs the same tests in their official toolchain containers instead.
+With the stack running, `make e2e` checks the services together through their real Dapr sidecars: cart updates under concurrency, stock limits, and that a checkout submitted twice places one order.
+
+`make test` lints and tests every service, and needs Go, golangci-lint, .NET, Node and Python installed. `make test-docker` runs the same checks in their official toolchain containers instead, including a throwaway PostgreSQL for catalog's database tests (`make test` skips those unless `TEST_DATABASE_URL` points at a disposable database).
 
 ## Local Kubernetes (kind)
 
@@ -152,6 +154,7 @@ When these variables aren't set, the Azure steps are skipped instead of failing.
 
 Other checks that run without any setup:
 
+- **Services** ([services.yml](.github/workflows/services.yml)): each changed service is linted (golangci-lint, `dotnet format` with analyzers, ESLint, ruff) and tested, catalog against a real PostgreSQL. Then the whole stack runs under Docker Compose for `make e2e`.
 - **Images:** each service is scanned with Trivy before it is pushed. A fixable CRITICAL vulnerability fails the build. Pushed images carry SBOM and provenance attestations.
 - **Chart** ([chart.yml](.github/workflows/chart.yml)): `helm lint`, kubeconform schema validation, and a smoke test that deploys the chart to kind and loads the storefront.
 - **Misconfiguration scans:** Trivy scans the chart and Terraform and reports its findings without blocking.
