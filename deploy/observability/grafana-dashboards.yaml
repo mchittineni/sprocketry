@@ -1,0 +1,9 @@
+# Loads the Sprocketry dashboards into the LGTM container's Grafana. The JSON lives in the Helm chart,
+# which uses the same files on Kubernetes.
+apiVersion: 1
+providers:
+  - name: sprocketry
+    folder: Sprocketry
+    type: file
+    options:
+      path: /otel-lgtm/sprocketry-dashboards

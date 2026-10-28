@@ -1,0 +1,99 @@
+# OpenTelemetry Collector for the local Docker Compose stack. It gathers the three signals and forwards
+# them to the LGTM container (Loki, Grafana, Tempo, Prometheus):
+#   traces   OTLP from the Dapr sidecars
+#   metrics  scraped from each Dapr sidecar's Prometheus endpoint
+#   logs     every container's stdout, read from Docker's JSON log files
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Each sidecar shares its app's network namespace, so it is reachable under the app's service name.
+  prometheus/dapr:
+    config:
+      scrape_configs:
+        - job_name: dapr
+          scrape_interval: 15s
+          static_configs:
+            - targets:
+                - storefront:9090
+                - catalog:9090
+                - cart:9090
+                - shipping:9090
+                - payment:9090
+                - fulfillment:9090
+
+  # docker-compose.yaml tags each log line with its compose service name (logging.options.labels).
+  file_log/docker:
+    include: [/var/lib/docker/containers/*/*-json.log]
+    # Read from the start; file_storage remembers offsets, so a collector restart doesn't resend lines.
+    start_at: beginning
+    storage: file_storage
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+      - type: move
+        from: attributes.log
+        to: body
+      - type: move
+        if: attributes.attrs != nil and attributes.attrs["com.docker.compose.service"] != nil
+        from: attributes.attrs["com.docker.compose.service"]
+        to: resource["service.name"]
+      - type: remove
+        if: attributes.attrs != nil
+        field: attributes.attrs
+      - type: remove
+        field: attributes.time
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  # Dapr labels sidecar metrics with app_id; make it the service name, as for traces and logs.
+  transform/metrics:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(resource.attributes["service.name"], attributes["app_id"]) where attributes["app_id"] != nil
+  resource:
+    attributes:
+      - key: deployment.environment.name
+        value: local
+        action: upsert
+  batch:
+
+exporters:
+  otlp_grpc/lgtm:
+    endpoint: lgtm:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol
+    create_directory: true
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp_grpc/lgtm]
+    metrics:
+      receivers: [otlp, prometheus/dapr]
+      processors: [memory_limiter, transform/metrics, resource, batch]
+      exporters: [otlp_grpc/lgtm]
+    logs:
+      receivers: [otlp, file_log/docker]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp_grpc/lgtm]
