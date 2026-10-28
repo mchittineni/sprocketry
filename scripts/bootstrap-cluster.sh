@@ -34,6 +34,13 @@ azure:
 
 gateway:
   enabled: true
+
+# Traces, metrics and logs into an in-cluster Grafana (make grafana).
+observability:
+  collector:
+    enabled: true
+  lgtm:
+    enabled: true
 EOF
   echo "Wrote $VALUES"
 fi
