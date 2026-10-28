@@ -7,7 +7,7 @@ on:
       - scripts/kind-up.sh
       - .github/workflows/chart.yml
   # push:
-  #   branches: 
+  #   branches:
   #     - main
   #   paths:
   #     - deploy/**
@@ -117,7 +117,7 @@ jobs:
 
       - name: Check Storefront
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://localhost:8080/ | grep -q "Cargo Bot" && curl -fsS -o /dev/null http://localhost:8080/cart; then
               echo "Storefront serves the catalog and cart."
               exit 0

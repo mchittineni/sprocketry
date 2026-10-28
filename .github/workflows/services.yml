@@ -5,15 +5,23 @@ on:
     paths:
       - services/**
       - .github/workflows/services.yml
+      - docker-compose.yaml
+      - deploy/dapr/local/**
+      - scripts/e2e.sh
   # push:
-  #   branches: 
+  #   branches:
   #     - main
   #   paths:
   #     - services/**
   #     - .github/workflows/services.yml
+  #     - docker-compose.yaml
+  #     - deploy/dapr/local/**
+  #     - scripts/e2e.sh
 
+# On a PR, a new push supersedes the running check. On main every commit gets its own group: GitHub cancels
+# a queued run when another queues behind it, which would skip building and promoting that commit's services.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
@@ -72,9 +80,34 @@ jobs:
         with:
           go-version-file: services/${{ matrix.service }}/go.mod
 
+      - name: Install golangci-lint
+        if: contains(fromJSON('["catalog","fulfillment"]'), matrix.service)
+        env:
+          GOLANGCI_LINT_VERSION: 2.15.0
+          GOLANGCI_LINT_SHA256: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
+        run: |
+          curl -fsSLo /tmp/golangci-lint.tgz \
+            "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
+          echo "${GOLANGCI_LINT_SHA256}  /tmp/golangci-lint.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/golangci-lint.tgz -C /usr/local/bin --strip-components=1 \
+            "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"
+
+      - name: Lint Go Code
+        if: contains(fromJSON('["catalog","fulfillment"]'), matrix.service)
+        run: test -z "$(gofmt -l .)" && golangci-lint run ./...
+
+      # Catalog's tests run against a real, disposable PostgreSQL.
+      - name: Start PostgreSQL
+        if: matrix.service == 'catalog'
+        run: |
+          echo "TEST_DATABASE_URL=postgres://test:test@localhost:5432/catalog" >> "$GITHUB_ENV"
+          docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=catalog postgres:18-alpine
+          for _ in $(seq 1 30); do docker exec postgres pg_isready -h 127.0.0.1 -U test && exit 0; sleep 1; done
+          exit 1
+
       - name: Run Go Tests
         if: contains(fromJSON('["catalog","fulfillment"]'), matrix.service)
-        run: go vet ./... && go test ./...
+        run: go vet ./... && go test -race ./...
 
       - name: Setup .NET
         if: matrix.service == 'cart'
@@ -82,9 +115,14 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Build .NET Project
+      - name: Build and Lint .NET Project
         if: matrix.service == 'cart'
-        run: dotnet build -c Release -warnaserror
+        run: dotnet build -c Release -warnaserror && dotnet format Cart.csproj --verify-no-changes
+
+      - name: Run .NET Tests
+        if: matrix.service == 'cart'
+        working-directory: services/cart/tests
+        run: dotnet test -c Release
 
       - name: Setup Node.js
         if: contains(fromJSON('["storefront","shipping"]'), matrix.service)
@@ -94,12 +132,12 @@ jobs:
           cache: npm
           cache-dependency-path: services/${{ matrix.service }}/package-lock.json
 
-      - name: Build Node.js Project
+      - name: Build and Lint Node.js Project
         if: contains(fromJSON('["storefront","shipping"]'), matrix.service)
-        run: npm ci && npm run build
+        run: npm ci && npm run lint && npm run build
 
       - name: Run Node.js Tests
-        if: matrix.service == 'shipping'
+        if: contains(fromJSON('["storefront","shipping"]'), matrix.service)
         run: npm test
 
       - name: Setup Python
@@ -108,9 +146,9 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Run Python Tests
+      - name: Lint and Test Python Code
         if: matrix.service == 'payment'
-        run: pip install ".[dev]" && pytest -q
+        run: pip install ".[dev]" && ruff check . && ruff format --check . && pytest -q
 
       # ---------- Image ----------
       # Every repo, including forks, publishes to its own GHCR namespace with no setup.
@@ -200,11 +238,37 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+  # The whole stack with real Dapr sidecars, Valkey and Postgres. Unit tests fake the sidecar; this is
+  # what proves the services agree with each other and with Dapr's actual behaviour.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PAYMENT_FAILURE_RATE: "0"
+      PAYMENT_DELAY_MS: "0"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start Local Stack
+        run: docker compose up --build -d
+
+      - name: Run End-to-End Checks
+        run: ./scripts/e2e.sh
+
+      - name: Dump Logs
+        if: failure()
+        run: docker compose ps -a && docker compose logs --tail=100
+
   # Closes the GitOps loop: once every changed image is pushed, pin those services to this commit's
   # SHA in Git. Argo CD deploys from Git, so this commit is what rolls the new images out.
-  # Runs only if every build succeeded, so a release never mixes new and failed services.
+  # Runs only if every build and the end-to-end checks succeeded, so a release never mixes new and failed services.
   promote:
-    needs: [changes, build]
+    needs: [changes, build, e2e]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -219,23 +283,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Pin Image Tags
-        run: |
-          for svc in $(jq -r '.[]' <<<"$SERVICES"); do
-            yq -i ".services.\"$svc\".tag = \"$GITHUB_SHA\"" "$TAGS_FILE"
-          done
-          cat "$TAGS_FILE"
-
-      - name: Commit and Push
+      # Runs for different commits can finish in any order, so a service is only moved forward: its pinned
+      # tag must be an ancestor of this commit. Each attempt starts from a fresh main, so a push that lands
+      # in between is never fought with a half-finished rebase.
+      - name: Pin Image Tags and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$TAGS_FILE"
-          if git diff --cached --quiet; then echo "Tags already current."; exit 0; fi
-          git commit -m "chore(deploy): promote $(jq -r 'join(", ")' <<<"$SERVICES") to ${GITHUB_SHA::7}"
-          # Another push may land on main meanwhile; rebase onto it and retry.
-          for attempt in 1 2 3; do
-            git pull --rebase origin main && git push origin HEAD:main && exit 0
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin main
+            git reset -q --hard origin/main
+            promoted=()
+            for svc in $(jq -r '.[]' <<<"$SERVICES"); do
+              current=$(yq ".services.\"$svc\".tag // \"\"" "$TAGS_FILE")
+              if git cat-file -e "${current}^{commit}" 2>/dev/null && ! git merge-base --is-ancestor "$current" "$GITHUB_SHA"; then
+                echo "$svc is pinned to $current, which is newer than ${GITHUB_SHA::7}; leaving it."
+                continue
+              fi
+              yq -i ".services.\"$svc\".tag = \"$GITHUB_SHA\"" "$TAGS_FILE"
+              promoted+=("$svc")
+            done
+            git add "$TAGS_FILE"
+            if git diff --cached --quiet; then echo "Tags already current."; exit 0; fi
+            cat "$TAGS_FILE"
+            list=$(printf '%s, ' "${promoted[@]}")
+            git commit -q -m "chore(deploy): promote ${list%, } to ${GITHUB_SHA::7}"
+            git push origin HEAD:main && exit 0
             sleep $((attempt * 5))
           done
           exit 1
