@@ -61,7 +61,7 @@ module "postgres" {
   resource_group_name = azurerm_resource_group.this.name
   subnet_id           = module.network.postgres_subnet_id
   private_dns_zone_id = module.network.postgres_private_dns_zone_id
-  databases           = ["catalog", "shipping"]
+  databases           = ["catalog", "shipping", "reviews", "profile", "keycloak"]
   tags                = local.tags
 
   # The server can only be created once its private DNS zone is linked to the VNet.
@@ -87,6 +87,17 @@ module "servicebus" {
 }
 
 # ==================== Secrets ====================
+# Keycloak's bootstrap admin, and the secret the storefront signs in to Keycloak with.
+resource "random_password" "keycloak_admin" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "storefront_client" {
+  length  = 48
+  special = false
+}
+
 # Key Vault is the single source of truth. External Secrets Operator syncs these into Kubernetes.
 module "keyvault" {
   source              = "../../modules/keyvault"
@@ -102,6 +113,15 @@ module "keyvault" {
     "shipping-database-url" = module.postgres.connection_strings["shipping"]
     "redis-host"            = module.redis.host
     "redis-password"        = module.redis.primary_access_key
+    "reviews-database-url"  = module.postgres.connection_strings["reviews"]
+    "profile-database-url"  = module.postgres.connection_strings["profile"]
+    # Keycloak uses the server's admin login: azurerm can't create PostgreSQL roles. Give it its own
+    # role (e.g. with the postgresql provider) for anything beyond a dev environment.
+    "keycloak-db-url"          = module.postgres.jdbc_urls["keycloak"]
+    "keycloak-db-username"     = module.postgres.admin_login
+    "keycloak-db-password"     = module.postgres.admin_password
+    "keycloak-admin-password"  = random_password.keycloak_admin.result
+    "storefront-client-secret" = random_password.storefront_client.result
   }
 }
 

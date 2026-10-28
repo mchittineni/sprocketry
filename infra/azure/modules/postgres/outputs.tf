@@ -10,3 +10,20 @@ output "connection_strings" {
   }
   sensitive = true
 }
+
+# JDBC form of each database's address, for Java services such as Keycloak. Credentials are separate.
+output "jdbc_urls" {
+  value = {
+    for db in var.databases :
+    db => "jdbc:postgresql://${azurerm_postgresql_flexible_server.this.fqdn}:5432/${db}?sslmode=require"
+  }
+}
+
+output "admin_login" {
+  value = var.admin_login
+}
+
+output "admin_password" {
+  value     = random_password.admin.result
+  sensitive = true
+}
