@@ -118,6 +118,45 @@ The **Sprocketry services** dashboard shows request rate, 5xx ratio and latency 
 
 On Kubernetes the collector runs as a DaemonSet that reads only its own node's pods, and the chart enables an in-cluster LGTM for kind and the Azure dev cluster. That LGTM keeps data in the pod, so it is lost when the pod restarts. For anything longer-lived, set `observability.lgtm.enabled: false` and point `observability.collector.exportEndpoint` at a managed OTLP backend.
 
+### SLOs and alerts
+
+The SLOs are code: one [Sloth](https://sloth.dev) spec per service in [deploy/slo/specs](deploy/slo/specs). `make slo` turns them into Prometheus recording and alerting rules in [deploy/helm/sprocketry/files/prometheus/rules](deploy/helm/sprocketry/files/prometheus/rules), which the Prometheus in LGTM evaluates in both the local stack and the chart. Commit the generated rules with the spec. CI fails if they are out of date. `make slo-test` regenerates the rules, validates them and runs the [promtool alert tests](deploy/slo/tests/burn-rate.test.yaml).
+
+Each SLI is measured by the Dapr sidecar, over the requests it delivers to its app (`dapr_http_client_*`), across a 30-day window:
+
+| Service | Availability: no 5xx | Latency |
+|---|---|---|
+| catalog | 99.5% | 99% within 250ms |
+| cart | 99.5% | 99% within 250ms |
+| shipping | 99.5% | 99% within 250ms |
+| payment | 99.5% | 99% within 1s |
+| fulfillment | 99.5% | none: it consumes the orders topic and no user waits on it |
+
+The storefront has no SLO yet: browser traffic reaches it directly, not through its sidecar. These targets are a starting point, not measured from history. Revisit them each quarter: tighten an SLO that never spends budget, and loosen one (or fix the service) that keeps running out.
+
+Each SLO has two multiwindow, multi-burn-rate alerts, following the Google SRE Workbook:
+
+| Alert | Fires when the budget burns at | Measured over | Meaning |
+|---|---|---|---|
+| `severity: page` | 14.4x, or 6x | 1h and 5m, or 6h and 30m | 2% of the month's budget gone in an hour, or 5% in six hours. Act now. |
+| `severity: ticket` | 3x, or 1x | 1d and 2h, or 3d and 6h | On course to spend the budget before the month ends. Look during working hours. |
+
+The short window makes an alert clear soon after the problem stops, and the long one keeps a brief spike from paging anyone. The alerts show in the **Sprocketry SLOs** dashboard and under Alerting → Alert rules (data source-managed). There is no Alertmanager, so nothing is sent anywhere yet. To try one, start the stack with `PAYMENT_FAILURE_RATE=0.3` and place some orders: the payment availability page alert fires within a few minutes.
+
+Error budget policy:
+
+- **Budget left:** ship as usual.
+- **Page alert:** stop feature work on that service and mitigate first, for example by rolling back to the previous image tag in Argo CD.
+- **Budget spent (remaining at or below 0):** only reliability fixes ship to that service until its SLI has been back above the objective for 7 days. Any incident that spent more than 20% of a budget gets a written postmortem.
+
+Things to know:
+
+- Dapr labels HTTP metrics by method and status only (`increasedCardinality: false`). With the request path as a label, every cart ID became its own series, which `rate()` can't count.
+- If a service is down entirely, its sidecar delivers nothing, so its SLI has no data and its alerts stay quiet. The callers' SLOs (payment, for example) still notice.
+- With little traffic, a couple of failures are a large share, so a quiet service can page on a handful of errors.
+- The in-cluster and local LGTM lose their data on restart, so the 30-day figures only cover the time since then.
+- `deploy/helm/sprocketry/files/prometheus/prometheus.yaml` replaces the LGTM image's Prometheus config to add the rules. Compare it with the image's own file whenever you upgrade `grafana/otel-lgtm`. With an external backend, load the rule files into its ruler (Mimir, Azure Monitor managed Prometheus, or a `PrometheusRule`) instead.
+
 ## Deploy to Azure
 
 > **This creates billable resources.** An AKS cluster (Free tier control plane, 1–3 `Standard_D4s_v5` nodes),
@@ -220,7 +259,8 @@ az group delete -n rg-terraform-state             # optional: the state storage 
 services/<name>/        source, Dockerfile, tests
 deploy/helm/            app chart: deployments, Dapr components, ExternalSecret, HTTPRoutes
 deploy/dapr/local/      Dapr components for docker compose
-deploy/dapr/local-config/  Dapr sidecar configuration (tracing) for docker compose
+deploy/dapr/local-config/  Dapr sidecar configuration (tracing, metrics) for docker compose
+deploy/slo/             SLO specs (Sloth) and their alert tests; `make slo` generates the Prometheus rules
 deploy/observability/   OpenTelemetry Collector and Grafana provisioning for docker compose
 deploy/helm/sprocketry/values-local.yaml   values for a local cluster (cloud: local)
 deploy/kind/            kind cluster config
@@ -236,7 +276,7 @@ scripts/                doctor, kind-up and one-time Azure bootstrap scripts
 
 - [ ] `reviews` service (Rust, Axum) and `profile` service with Keycloak OIDC
 - [x] OpenTelemetry Collector and Grafana LGTM stack
-- [ ] SLOs as code and burn-rate alerts
+- [x] SLOs as code and burn-rate alerts
 - [ ] Argo Rollouts canary releases, OpenFeature + flagd for runtime fault toggles
 - [ ] Chaos Mesh experiments
 - [ ] Kyverno policies, image signing with Cosign, SBOMs
