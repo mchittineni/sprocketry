@@ -1,12 +1,10 @@
 import Link from 'next/link';
-import { call, cartId, type Cart, type Destination, type Product } from '@/lib/api';
+import { authedCall, call, cartId, destinations as loadDestinations, type Cart, type Profile, type Product, type Quote } from '@/lib/api';
+import { getSession } from '@/lib/auth';
 import { CartView } from '@/components/CartView';
 import { Robot } from '@/components/Robot';
 
 export const dynamic = 'force-dynamic';
-
-interface Country { code: string; name: string }
-interface City { id: number; name: string }
 
 export default async function CartPage() {
   const cart = await call<Cart>('cart', `cart/${await cartId()}`);
@@ -22,15 +20,32 @@ export default async function CartPage() {
     );
   }
 
-  // Shipping destinations and product categories (for the line illustrations) load in parallel.
-  const [countries, products] = await Promise.all([
-    call<Country[]>('shipping', 'countries'),
+  // Shipping destinations, product categories (for the line illustrations) and, for a signed-in shopper,
+  // their default city all load in parallel. The default city is a convenience, so a failure is ignored.
+  const [destinations, products, defaultCityId] = await Promise.all([
+    loadDestinations(),
     call<Product[]>('catalog', 'products'),
+    defaultCity(),
   ]);
-  const destinations: Destination[] = await Promise.all(
-    countries.map(async (c) => ({ ...c, cities: await call<City[]>('shipping', `cities/${c.code}`) })),
-  );
   const categories = Object.fromEntries(products.map((p) => [p.sku, p.category]));
+  const initialQuote = defaultCityId ? await call<Quote>('shipping', `quote/${defaultCityId}`).catch(() => null) : null;
 
-  return <CartView cart={cart} destinations={destinations} categories={categories} />;
+  return (
+    <CartView
+      cart={cart}
+      destinations={destinations}
+      categories={categories}
+      defaultCityId={initialQuote ? defaultCityId : null}
+      initialQuote={initialQuote}
+    />
+  );
+}
+
+async function defaultCity(): Promise<number | null> {
+  try {
+    if (!(await getSession())) return null;
+    return (await authedCall<Profile>('profile', 'me')).defaultCityId;
+  } catch {
+    return null;
+  }
 }
