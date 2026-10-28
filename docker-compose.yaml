@@ -120,8 +120,10 @@ services:
     image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/payment:${TAG:-latest}
     environment:
       <<: *app-env
-      PAYMENT_FAILURE_RATE: ${PAYMENT_FAILURE_RATE:-0}
-      PAYMENT_DELAY_MS: ${PAYMENT_DELAY_MS:-0}
+      # Fault flags, evaluated in-process from flagd's stream (scripts/fault.sh toggles them).
+      FLAGD_HOST: flagd
+      FLAGD_RESOLVER: in-process
+      APP_VERSION: ${TAG:-latest}
   payment-dapr:
     <<: *daprd
     depends_on:
@@ -205,6 +207,15 @@ services:
       - ./deploy/helm/sprocketry/files/keycloak:/opt/keycloak/data/import:ro
     depends_on:
       postgres: { condition: service_healthy }
+
+  # Serves the fault flags. It watches the file, so an edit (scripts/fault.sh) applies within a second.
+  flagd:
+    image: ghcr.io/open-feature/flagd:v0.17.0
+    command: ["start", "--uri", "file:/etc/flagd/faults.json"]
+    logging: *logging
+    volumes:
+      # The directory, not the file: a file mount would keep the old copy if an editor replaces it.
+      - ./deploy/helm/sprocketry/files/flagd:/etc/flagd:ro
 
   # ---------- Observability ----------
   # Collects traces, metrics and logs and forwards them to the LGTM container.
