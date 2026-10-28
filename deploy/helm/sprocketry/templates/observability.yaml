@@ -76,6 +76,10 @@ data:
                 - source_labels: [__meta_kubernetes_pod_container_port_name]
                   regex: dapr-metrics
                   action: keep
+                # Argo Rollouts labels each pod with its version's hash, so canary analysis can tell the
+                # new version's requests from the stable one's.
+                - source_labels: [__meta_kubernetes_pod_label_rollouts_pod_template_hash]
+                  target_label: rollouts_pod_template_hash
 
       file_log/pods:
         include: [/var/log/pods/{{ .Release.Namespace }}_*/*/*.log]
@@ -278,6 +282,7 @@ spec:
           ports:
             - { name: grafana, containerPort: 3000 }
             - { name: otlp-grpc, containerPort: 4317 }
+            - { name: prometheus, containerPort: 9090 }
           readinessProbe:
             exec:
               command: [test, -f, /tmp/ready]
@@ -377,4 +382,6 @@ spec:
   ports:
     - { name: grafana, port: 3000, targetPort: grafana }
     - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    # Queried by Argo Rollouts' canary analysis.
+    - { name: prometheus, port: 9090, targetPort: prometheus }
 {{- end }}

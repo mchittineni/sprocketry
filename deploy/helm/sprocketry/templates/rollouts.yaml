@@ -1,0 +1,55 @@
+{{- if .Values.rollouts.enabled }}
+{{- $analysis := .Values.rollouts.analysis }}
+{{- $prometheus := $analysis.prometheusUrl }}
+{{- if and (not $prometheus) .Values.observability.lgtm.enabled }}
+{{- $prometheus = printf "http://lgtm.%s.svc:9090" .Release.Namespace }}
+{{- end }}
+{{- if not $prometheus }}{{ fail "rollouts.enabled needs rollouts.analysis.prometheusUrl or observability.lgtm.enabled" }}{{ end }}
+# Judges a canary by the share of its own requests that fail. The Dapr sidecar of every pod counts the
+# requests it hands to its app; the collector labels them with the pod's rollouts-pod-template-hash, which
+# picks out the new version's pods. Runs for the whole release, and two failed measurements roll it back.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-error-ratio
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: app
+    - name: canary-hash
+  metrics:
+    - name: error-ratio
+      interval: {{ $analysis.interval }}
+      # A window in which no request reached the canary gives an empty result: no evidence against it.
+      successCondition: len(result) == 0 || result[0] <= {{ $analysis.maxErrorRatio }}
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: {{ $prometheus }}
+          query: |
+            (sum(rate(dapr_http_client_completed_count_total{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}",status=~"5.."}[1m])) or vector(0))
+            / (sum(rate(dapr_http_client_completed_count_total{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[1m])) > 0)
+{{- if and .Values.networkPolicy.enabled .Values.observability.lgtm.enabled (not $analysis.prometheusUrl) }}
+---
+# The Argo Rollouts controller queries the in-cluster Prometheus.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-rollouts-to-prometheus
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lgtm
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $analysis.controllerNamespace }}
+      ports:
+        - { port: 9090, protocol: TCP }
+{{- end }}
+{{- end }}

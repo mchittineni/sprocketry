@@ -27,3 +27,9 @@ observability:
     enabled: true
   lgtm:
     enabled: true
+
+# Canary releases (Argo Rollouts), judged on the in-cluster Prometheus, and runtime fault flags (flagd).
+rollouts:
+  enabled: true
+flags:
+  enabled: true

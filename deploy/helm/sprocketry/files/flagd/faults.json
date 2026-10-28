@@ -1,0 +1,37 @@
+{
+  "$schema": "https://flagd.dev/schema/v0/flags.json",
+  "flags": {
+    "payment-failure-rate": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0.0,
+        "5pct": 0.05,
+        "20pct": 0.2,
+        "all": 1.0
+      },
+      "defaultVariant": "off",
+      "targeting": {
+        "if": [
+          {
+            "starts_with": [
+              {
+                "var": "version"
+              },
+              "faulty"
+            ]
+          },
+          "all"
+        ]
+      }
+    },
+    "payment-delay-ms": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0,
+        "500ms": 500,
+        "1500ms": 1500
+      },
+      "defaultVariant": "off"
+    }
+  }
+}
