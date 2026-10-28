@@ -1,0 +1,470 @@
+{
+  "uid": "sprocketry-slos",
+  "title": "Sprocketry SLOs",
+  "tags": [
+    "sprocketry",
+    "slo"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Sprocketry services",
+      "type": "link",
+      "url": "/d/sprocketry-services"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(sloth_slo_info, sloth_service)",
+          "refId": "service"
+        },
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "allValue": ".+",
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "SLOs",
+      "description": "Each SLO over its 30-day window. SLI is the share of good requests; error budget remaining is how much of the allowed failure is left (negative when overspent); burn rate is how fast the last 5 minutes spent budget (1 = exactly on budget). Data in the in-cluster or local LGTM is lost when it restarts, so the 30-day figures cover only the time since then.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sloth_service, sloth_slo) (slo:objective:ratio{sloth_service=~\"$service\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1 - sum by (sloth_service, sloth_slo) (slo:sli_error:ratio_rate30d{sloth_service=~\"$service\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sloth_service, sloth_slo) (slo:period_error_budget_remaining:ratio{sloth_service=~\"$service\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sloth_service, sloth_slo) (slo:current_burn_rate:ratio{sloth_service=~\"$service\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "sloth_service": "Service",
+              "sloth_slo": "SLO",
+              "Value #A": "Objective",
+              "Value #B": "SLI (30d)",
+              "Value #C": "Error budget remaining",
+              "Value #D": "Burn rate (5m)"
+            },
+            "indexByName": {
+              "sloth_service": 0,
+              "sloth_slo": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error budget remaining"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.25
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Burn rate (5m)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "x"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 14.4
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Error budget remaining",
+            "desc": false
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Firing SLO alerts",
+      "description": "Burn-rate alerts Prometheus is firing now. page: the budget will be gone within days, act now. ticket: a slower burn to look at during working hours. Also listed under Alerting \u2192 Alert rules, as data source-managed rules.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (alertname, severity, sloth_service, sloth_slo) (ALERTS{alertstate=\"firing\", sloth_service=~\"$service\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "sloth_service": "Service",
+              "sloth_slo": "SLO"
+            },
+            "indexByName": {
+              "severity": 0,
+              "sloth_service": 1,
+              "sloth_slo": 2,
+              "alertname": 3
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No SLO alerts firing"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Burn rate, 1h window",
+      "description": "Error ratio over the last hour divided by the error budget. The page alert needs this above 14.4 (and the 5m window too): at that pace a 30-day budget is gone in about two days.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "x",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 14.4
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sloth_service, sloth_slo) (slo:sli_error:ratio_rate1h{sloth_service=~\"$service\"}) / sum by (sloth_service, sloth_slo) (slo:error_budget:ratio{sloth_service=~\"$service\"})",
+          "legendFormat": "{{sloth_service}} {{sloth_slo}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Burn rate, 6h window",
+      "description": "Error ratio over the last six hours divided by the error budget. The slower page alert needs this above 6 (and the 30m window too); the ticket alert needs it above 1 with the 3d window.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "x",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 6
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sloth_service, sloth_slo) (slo:sli_error:ratio_rate6h{sloth_service=~\"$service\"}) / sum by (sloth_service, sloth_slo) (slo:error_budget:ratio{sloth_service=~\"$service\"})",
+          "legendFormat": "{{sloth_service}} {{sloth_slo}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Error budget remaining (30d)",
+      "description": "Share of each SLO's 30-day error budget not yet spent.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sloth_service, sloth_slo) (slo:period_error_budget_remaining:ratio{sloth_service=~\"$service\"})",
+          "legendFormat": "{{sloth_service}} {{sloth_slo}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "SLI, 5m window",
+      "description": "Share of good requests over the last five minutes, against the objective.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1 - sum by (sloth_service, sloth_slo) (slo:sli_error:ratio_rate5m{sloth_service=~\"$service\"})",
+          "legendFormat": "{{sloth_service}} {{sloth_slo}}"
+        }
+      ]
+    }
+  ]
+}
