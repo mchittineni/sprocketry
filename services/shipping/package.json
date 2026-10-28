@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "node --test dist/**/*.spec.js"
+    "test": "node --test dist/**/*.spec.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@nestjs/common": "^12.3.0",
@@ -18,8 +19,11 @@
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^24.19.0",
     "@types/pg": "^8.23.0",
-    "typescript": "~6.0.3"
+    "eslint": "^9.39.5",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1"
   }
 }

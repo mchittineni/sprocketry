@@ -29,10 +29,12 @@ export interface Quote {
 export class ShippingService implements OnModuleInit, OnModuleDestroy {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  // The schema is idempotent, so it is safe to apply on every start.
+  // The schema is idempotent, so it is safe to apply on every start. A query without parameters runs all
+  // its statements as one transaction. Concurrent CREATE TABLE IF NOT EXISTS on an empty database fails one
+  // replica, so the advisory lock makes replicas take turns.
   async onModuleInit() {
     const schema = await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8');
-    await this.pool.query(schema);
+    await this.pool.query(`SELECT pg_advisory_xact_lock(hashtext('shipping-schema'));\n${schema}`);
   }
 
   async countries(): Promise<{ code: string; name: string }[]> {

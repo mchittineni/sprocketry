@@ -7,7 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && find dist -name "*.spec.js" -delete && npm prune --omit=dev
 
 FROM gcr.io/distroless/nodejs24-debian13:nonroot
 WORKDIR /app
