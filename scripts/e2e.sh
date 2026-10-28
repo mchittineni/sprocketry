@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end checks against the running local stack (`make up`), through the real Dapr sidecars,
-# Valkey and Postgres: cart concurrency, stock limits, and that a checkout submitted twice places one
-# order. Needs the stack running with PAYMENT_FAILURE_RATE=0.
+# Valkey, Postgres and Keycloak: cart concurrency, stock limits, that a checkout submitted twice places
+# one order, signing in through the storefront, and that reviews and profile accept only valid tokens.
+# Needs the stack running with PAYMENT_FAILURE_RATE=0.
 set -euo pipefail
 
 CURL_IMAGE=${CURL_IMAGE:-curlimages/curl:8.17.0}
@@ -74,4 +75,78 @@ if [ -n "$order" ]; then
   done
   if [ "$dispatched" = 1 ]; then echo "ok   order dispatched once"; else echo "FAIL order dispatched $dispatched times"; status=1; fi
 fi
+
+# ---------- Identity ----------
+# A throwaway shopper, and a throwaway client that may exchange a password for a token, so the services
+# can be called with real Keycloak tokens. The storefront's own client allows only the browser flow.
+KC=http://localhost:${KEYCLOAK_PORT:-8081}
+SF=http://localhost:${STOREFRONT_PORT:-3000}
+run=$(date +%s)-$$
+user=e2e-$run
+pass=Pw-$run-x9
+client=e2e-$run
+host_check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want $2, got $3"; status=1; fi; }
+# The first value of a JSON field; good enough for the flat answers used here.
+json_field() { grep -o "\"$1\":\"\{0,1\}[^\",}]*" | head -1 | sed 's/^[^:]*:"\{0,1\}//'; }
+
+admin_token() {
+  curl -s -d client_id=admin-cli -d username=admin -d password=admin -d grant_type=password \
+    "$KC/realms/master/protocol/openid-connect/token" | json_field access_token
+}
+kc() { curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(admin_token)" -H 'content-type: application/json' "$@"; }
+cleanup() {
+  for kind in users clients; do
+    field=$([ "$kind" = users ] && echo username || echo clientId)
+    id=$(curl -s -H "Authorization: Bearer $(admin_token)" "$KC/admin/realms/sprocketry/$kind?$field=e2e-$run&exact=true" | json_field id)
+    if [ -n "$id" ]; then kc -X DELETE "$KC/admin/realms/sprocketry/$kind/$id" >/dev/null; fi
+  done
+}
+trap cleanup EXIT
+
+host_check "create test shopper" 201 "$(kc -X POST "$KC/admin/realms/sprocketry/users" -d '{"username":"'"$user"'","email":"'"$user"'@example.test","firstName":"E2E","lastName":"Shopper","enabled":true,"emailVerified":true,"credentials":[{"type":"password","value":"'"$pass"'","temporary":false}]}')"
+host_check "create test client" 201 "$(kc -X POST "$KC/admin/realms/sprocketry/clients" -d '{"clientId":"'"$client"'","secret":"'"$client"'-secret","publicClient":false,"standardFlowEnabled":false,"directAccessGrantsEnabled":true,"protocolMappers":[{"name":"audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","config":{"included.custom.audience":"sprocketry-api","access.token.claim":"true"}}]}')"
+token=$(curl -s -d client_id="$client" -d client_secret="$client-secret" -d username="$user" -d password="$pass" \
+  -d grant_type=password -d scope=openid "$KC/realms/sprocketry/protocol/openid-connect/token" | json_field access_token)
+wrong_issuer=$(admin_token)
+
+ids=$(docker run --rm -i --network "container:$STOREFRONT" -e TOKEN="$token" -e WRONG="$wrong_issuer" "$CURL_IMAGE" sh -s <<'EOF'
+set -u
+D=http://localhost:3500/v1.0/invoke
+failed=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want $2, got $3"; failed=1; fi; }
+status() { curl -s -o /tmp/body -w '%{http_code}' "$@"; }
+post() { status -X POST -H 'content-type: application/json' "$@"; }
+
+review='{"rating":4,"body":"Lifts more than the brochure says."}'
+check "review without a token is refused" 401 "$(post -d "$review" "$D/reviews/method/products/RB-001/reviews")"
+check "review with another realm's token is refused" 401 "$(post -H "authorization: Bearer $WRONG" -d "$review" "$D/reviews/method/products/RB-001/reviews")"
+check "review is posted" 201 "$(post -H "authorization: Bearer $TOKEN" -d "$review" "$D/reviews/method/products/RB-001/reviews")"
+check "review shows the shopper's name" 1 "$(grep -c '"author":"E2E Shopper"' /tmp/body)"
+check "second review of the same robot is refused" 409 "$(post -H "authorization: Bearer $TOKEN" -d "$review" "$D/reviews/method/products/RB-001/reviews")"
+check "review of an unknown robot is refused" 404 "$(post -H "authorization: Bearer $TOKEN" -d "$review" "$D/reviews/method/products/NOPE/reviews")"
+check "reviews are public" 200 "$(status "$D/reviews/method/products/RB-001/reviews")"
+
+check "profile needs a token" 401 "$(status "$D/profile/method/me")"
+check "profile defaults to the token's name" 1 "$(status -H "authorization: Bearer $TOKEN" "$D/profile/method/me" >/dev/null; grep -c '"displayName":"E2E Shopper"' /tmp/body)"
+check "profile refuses an unknown city" 400 "$(status -X PUT -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"displayName":"Eve","defaultCityId":9999}' "$D/profile/method/me")"
+check "profile saves name and city" 200 "$(status -X PUT -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"displayName":"Eve","defaultCityId":1}' "$D/profile/method/me")"
+check "profile keeps the default city" 1 "$(status -H "authorization: Bearer $TOKEN" "$D/profile/method/me" >/dev/null; grep -c '"defaultCityId":1' /tmp/body)"
+exit $failed
+EOF
+) && echo "$ids" || { echo "$ids"; status=1; }
+
+# The browser flow: storefront → Keycloak's login form → back to the storefront, signed in.
+jar=$(mktemp)
+web() { curl -s -c "$jar" -b "$jar" "$@"; }
+login_url=$(web -o /dev/null -w '%{redirect_url}' "$SF/auth/login?returnTo=/account")
+host_check "sign-in goes to Keycloak" "$KC/realms/sprocketry/protocol/openid-connect/auth" "${login_url%%\?*}"
+form=$(web "$login_url" | grep -o '<form[^>]*kc-form-login[^>]*>' || true)
+action=$(sed -n 's/.*action="\([^"]*\)".*/\1/p' <<<"$form" | sed 's/&amp;/\&/g')
+callback=$(web -o /dev/null -w '%{redirect_url}' --data-urlencode "username=$user" --data-urlencode "password=$pass" "$action")
+host_check "Keycloak returns to the storefront" "$SF/auth/callback" "${callback%%\?*}"
+host_check "callback returns to the requested page" "$SF/account" "$(web -o /dev/null -w '%{redirect_url}' "$callback")"
+host_check "account page shows the saved profile" 1 "$(web "$SF/account" | grep -c 'value="Eve"' || true)"
+host_check "sign-out ends the Keycloak session too" "$KC/realms/sprocketry/protocol/openid-connect/logout" "$(web -o /dev/null -w '%{redirect_url}' "$SF/auth/logout" | sed 's/?.*//')"
+host_check "account page needs sign-in again" "$SF/auth/login?returnTo=%2Faccount" "$(web -o /dev/null -w '%{redirect_url}' "$SF/account")"
+rm -f "$jar"
 exit "$status"

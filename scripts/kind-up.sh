@@ -7,7 +7,7 @@ CLUSTER=${CLUSTER:-sprocketry}
 DAPR_VERSION=${DAPR_VERSION:-1.18.9}
 REGISTRY=${REGISTRY:-ghcr.io/mchittineni/sprocketry}
 TAG=${TAG:-dev}
-SERVICES=(storefront catalog cart shipping payment fulfillment)
+SERVICES=(storefront catalog cart shipping payment fulfillment reviews profile)
 
 if ! kind get clusters | grep -qx "$CLUSTER"; then
   kind create cluster --name "$CLUSTER" --config deploy/kind/cluster.yaml
