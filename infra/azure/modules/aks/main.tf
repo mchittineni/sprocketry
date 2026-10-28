@@ -97,5 +97,7 @@ resource "azurerm_kubernetes_cluster_extension" "dapr" {
 
   configuration_settings = {
     "global.ha.enabled" = "false"
+    # Gives Argo Rollouts (canary releases) the <app>-dapr Service that Dapr name resolution uses.
+    "global.argoRolloutServiceReconciler.enabled" = "true"
   }
 }
