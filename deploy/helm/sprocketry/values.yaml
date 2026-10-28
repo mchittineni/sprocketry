@@ -105,6 +105,40 @@ auth:
 networkPolicy:
   enabled: true
 
+# Fault flags (OpenFeature, served by flagd) from files/flagd/faults.json: payment reads
+# payment-failure-rate and payment-delay-ms on every checkout. scripts/fault.sh changes them at runtime.
+flags:
+  enabled: false
+  image: ghcr.io/open-feature/flagd:v0.17.0
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+# Canary releases with Argo Rollouts. Each service becomes a Rollout: a new version takes a growing share
+# of requests step by step, while an analysis watches the new pods' error ratio in Prometheus and rolls the
+# release back if it is too high. Needs the Argo Rollouts controller, and Dapr's service reconciler for
+# Rollouts (scripts/kind-up.sh and scripts/bootstrap-cluster.sh install both).
+rollouts:
+  enabled: false
+  # There is no traffic router: Dapr spreads calls over all of a service's pods, so a weight is reached by
+  # running that share of the replicas on the new version (at least one pod).
+  steps:
+    - setWeight: 25
+    - pause: { duration: 2m }
+    - setWeight: 50
+    - pause: { duration: 2m }
+  analysis:
+    # Prometheus with the Dapr sidecar metrics. Empty uses the in-cluster LGTM (observability.lgtm).
+    prometheusUrl: ""
+    # Namespace of the Argo Rollouts controller, which runs the queries.
+    controllerNamespace: argo-rollouts
+    # Highest share of the new version's requests that may fail (5xx).
+    maxErrorRatio: "0.05"
+    interval: 30s
+
 # Services with more than one replica get a PDB, so node drains (AKS auto-upgrades) evict one pod at a time.
 podDisruptionBudget:
   maxUnavailable: 1
@@ -121,6 +155,9 @@ services:
     replicas: 2
     healthPath: /api/healthz
     public: true
+    # Browsers reach the storefront directly, not through its sidecar, so there are no request metrics
+    # for canary analysis to judge. Its releases step through the canary weights unchecked.
+    rolloutAnalysis: false
     # Next.js writes its cache here; the root filesystem is read-only.
     writablePaths: [/app/.next/cache]
     # Signs shoppers in through Keycloak when auth.enabled.
@@ -148,9 +185,8 @@ services:
     replicas: 2
     healthPath: /healthz
     workloadIdentity: true
-    env:
-      PAYMENT_FAILURE_RATE: "0"
-      PAYMENT_DELAY_MS: "0"
+    # Reads the fault flags from flagd when flags.enabled.
+    flags: true
   fulfillment:
     port: 8080
     replicas: 1

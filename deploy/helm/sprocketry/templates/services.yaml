@@ -1,4 +1,5 @@
 {{- $apps := splitList "," (include "sprocketry.apps" .) }}
+{{- $rollouts := .Values.rollouts.enabled }}
 {{- range $name, $svc := .Values.services }}
 {{- if has $name $apps }}
 ---
@@ -13,8 +14,9 @@ metadata:
     azure.workload.identity/client-id: {{ required "azure.appsClientId is required" $.Values.azure.appsClientId | quote }}
   {{- end }}
 ---
-apiVersion: apps/v1
-kind: Deployment
+# With rollouts.enabled a Rollout (Argo Rollouts) runs the pods instead, and releases them as a canary.
+apiVersion: {{ ternary "argoproj.io/v1alpha1" "apps/v1" $rollouts }}
+kind: {{ ternary "Rollout" "Deployment" $rollouts }}
 metadata:
   name: {{ $name }}
   labels:
@@ -25,6 +27,23 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ $name }}
+  {{- if $rollouts }}
+  strategy:
+    canary:
+      {{- if ne $svc.rolloutAnalysis false }}
+      analysis:
+        templates:
+          - templateName: canary-error-ratio
+        args:
+          - name: app
+            value: {{ $name }}
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      {{- end }}
+      steps:
+        {{- toYaml $.Values.rollouts.steps | nindent 8 }}
+  {{- end }}
   template:
     metadata:
       labels:
@@ -41,6 +60,9 @@ spec:
         dapr.io/log-as-json: "true"
     spec:
       serviceAccountName: {{ $name }}
+      # Kubernetes would otherwise set <SERVICE>_PORT=tcp://... for every Service, and FLAGD_PORT is the
+      # flagd provider's own setting. Dapr resolves services by name, so nothing here uses these.
+      enableServiceLinks: false
       # Spread replicas over nodes, so losing or draining one node doesn't take a whole service down.
       # ScheduleAnyway keeps pods schedulable on a single-node cluster such as kind.
       topologySpreadConstraints:
@@ -50,7 +72,7 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: {{ $name }}
-          matchLabelKeys: [pod-template-hash]
+          matchLabelKeys: [{{ ternary "rollouts-pod-template-hash" "pod-template-hash" $rollouts }}]
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -77,6 +99,13 @@ spec:
           env:
             - name: PORT
               value: {{ $svc.port | quote }}
+            # Fault flags can target a version, e.g. to make a canary fail on purpose.
+            - name: APP_VERSION
+              value: {{ $svc.tag | default $.Values.image.tag | quote }}
+            {{- if and $svc.flags $.Values.flags.enabled }}
+            - { name: FLAGD_HOST, value: flagd }
+            - { name: FLAGD_RESOLVER, value: in-process }
+            {{- end }}
             {{- range $k, $v := $svc.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

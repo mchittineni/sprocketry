@@ -1,0 +1,107 @@
+{{- if .Values.flags.enabled }}
+{{- $apps := splitList "," (include "sprocketry.apps" .) }}
+{{- $readers := list }}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.flags (has $name $apps) }}{{ $readers = append $readers $name }}{{ end }}
+{{- end }}
+# The fault flags. scripts/fault.sh edits this ConfigMap at runtime; flagd reloads it when the kubelet
+# refreshes the mounted copy. Argo CD reverts such edits, so on a synced cluster change the file in Git.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flagd-flags
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  faults.json: |
+    {{- .Files.Get "files/flagd/faults.json" | nindent 4 }}
+---
+# Streams the flags to the services, which evaluate them in-process. While flagd is down the services keep
+# their last copy (or the defaults, which inject no faults), so one replica is enough.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flagd
+  labels:
+    app.kubernetes.io/name: flagd
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flagd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flagd
+        {{- include "sprocketry.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      # flagd reads FLAGD_* settings, and its own Service would add FLAGD_PORT=tcp://...
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: flagd
+          image: {{ .Values.flags.image }}
+          args: ["start", "--uri", "file:/etc/flagd/faults.json"]
+          ports:
+            - { name: sync, containerPort: 8015 }
+            - { name: management, containerPort: 8014 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: management }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: management }
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.flags.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: flags, mountPath: /etc/flagd, readOnly: true }
+      volumes:
+        - name: flags
+          configMap:
+            name: flagd-flags
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flagd
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: flagd
+  ports:
+    - { name: sync, port: 8015, targetPort: sync }
+{{- if and .Values.networkPolicy.enabled $readers }}
+---
+# Only the services that read flags reach flagd.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-flag-readers-to-flagd
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: flagd
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/name, operator: In, values: [{{ join ", " $readers }}] }
+      ports:
+        - { port: 8015, protocol: TCP }
+{{- end }}
+{{- end }}
