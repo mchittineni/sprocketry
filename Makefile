@@ -54,13 +54,22 @@ test: ## Lint and test every service (needs Go, golangci-lint, .NET, Node and Py
 	cd services/shipping && npm ci && npm run lint && npm run build && npm test
 	cd services/storefront && npm ci && npm run lint && npm run build && npm test
 	cd services/payment && pip install -q ".[dev]" && ruff check . && ruff format --check . && pytest -q
-	@echo "Catalog's database tests skip unless TEST_DATABASE_URL is set; test-docker provides one."
+	cd services/reviews && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+	cd services/profile && mvn -B -q verify
+	@echo "Database tests (catalog, reviews, profile) skip unless TEST_DATABASE_URL is set; test-docker provides one."
 
 # Runs a command in a toolchain container with services/<name> mounted, as the current user.
 # The optional fourth argument adds docker run flags.
 in_container = docker run --rm $(4) -u $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/services/$(1):/src -w /src $(2) sh -c '$(3)'
 
 go_checks := test -z "$$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+# Runs a service's checks in a toolchain container beside a throwaway PostgreSQL database named after it.
+with_test_db = docker rm -f $(TEST_PG) >/dev/null 2>&1; docker network create $(TEST_NET) >/dev/null 2>&1; \
+	docker run -d --name $(TEST_PG) --network $(TEST_NET) -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=$(1) postgres:18-alpine >/dev/null && \
+	until docker exec $(TEST_PG) pg_isready -h 127.0.0.1 -U test >/dev/null 2>&1; do sleep 1; done && \
+	$(call in_container,$(1),$(2),$(3),--network $(TEST_NET) -e TEST_DATABASE_URL=postgres://test:test@$(TEST_PG):5432/$(1)); \
+	status=$$?; docker rm -f $(TEST_PG) >/dev/null; exit $$status
 
 test-docker: ## Lint and test every service, using only Docker
 	@docker network create $(TEST_NET) >/dev/null 2>&1 || true
@@ -76,6 +85,8 @@ test-docker: ## Lint and test every service, using only Docker
 	$(call in_container,shipping,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
 	$(call in_container,storefront,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
 	$(call in_container,payment,python:3.14-slim,python -m venv /tmp/venv && /tmp/venv/bin/pip install -q ".[dev]" && /tmp/venv/bin/ruff check . && /tmp/venv/bin/ruff format --check . && /tmp/venv/bin/pytest -q -p no:cacheprovider)
+	$(call with_test_db,reviews,rust:1.99-slim-trixie,CARGO_HOME=/tmp/cargo cargo fmt --check && CARGO_HOME=/tmp/cargo cargo clippy --all-targets --locked -- -D warnings && CARGO_HOME=/tmp/cargo cargo test --locked)
+	$(call with_test_db,profile,maven:3.9.16-eclipse-temurin-25,mvn -B -q -Dmaven.repo.local=/tmp/m2 verify)
 
 # ---------- SLOs ----------
 slo: ## Generate the Prometheus SLO rules from deploy/slo/specs (then restart lgtm to load them)
