@@ -55,6 +55,7 @@ Payment and fulfillment have fault-injection settings (`PAYMENT_FAILURE_RATE`, `
 | Identity | n/a | AKS workload identity (federated, no stored credentials) |
 | Ingress | port 3000 | Envoy Gateway (Gateway API) |
 | Delivery | `make up` | GitHub Actions (OIDC) → ACR → tag commit → Argo CD |
+| Observability | OpenTelemetry Collector → Grafana LGTM container | Collector agent per node → in-cluster LGTM, or any OTLP backend |
 | IaC | n/a | **Terraform** (`infra/azure`) |
 
 ## Ways to run it
@@ -75,6 +76,7 @@ Requires only Docker.
 ```bash
 make up            # builds all images and starts the stack
 open http://localhost:3000
+open http://localhost:3001   # Grafana (admin/admin): Sprocketry → Sprocketry services
 make smoke         # k6 load test; uses the grafana/k6 container if k6 isn't installed
 make down
 ```
@@ -96,10 +98,25 @@ Runs the Helm chart on a local cluster with `cloud: local`. Dapr components poin
 make kind-up       # kind cluster + Dapr + build/load images + helm install
 open http://localhost:8080
 make smoke BASE_URL=http://localhost:8080
+make grafana       # Grafana on http://localhost:3001 (admin/admin)
 make kind-down
 ```
 
 Data lives in `emptyDir` volumes, so it resets when the Postgres or Valkey pods restart.
+
+## Observability
+
+Every signal goes through an OpenTelemetry Collector to Grafana's LGTM stack: Loki for logs, Grafana, Tempo for traces and Prometheus for metrics.
+
+| Signal | Source |
+|---|---|
+| Traces | Dapr sidecars, over OTLP, for every service invocation and pub/sub message |
+| Metrics | each Dapr sidecar's Prometheus endpoint: request rates, status codes, latency histograms, pub/sub counts |
+| Logs | every container's stdout, labelled with `service.name` (`<app>` or `<app>-dapr` for its sidecar) |
+
+The **Sprocketry services** dashboard shows request rate, 5xx ratio and latency per service, calls between services, the orders topic and logs. Its JSON lives in [deploy/helm/sprocketry/files/dashboards](deploy/helm/sprocketry/files/dashboards), and the local stack and the chart both load it from there.
+
+On Kubernetes the collector runs as a DaemonSet that reads only its own node's pods, and the chart enables an in-cluster LGTM for kind and the Azure dev cluster. That LGTM keeps data in the pod, so it is lost when the pod restarts. For anything longer-lived, set `observability.lgtm.enabled: false` and point `observability.collector.exportEndpoint` at a managed OTLP backend.
 
 ## Deploy to Azure
 
@@ -203,6 +220,8 @@ az group delete -n rg-terraform-state             # optional: the state storage 
 services/<name>/        source, Dockerfile, tests
 deploy/helm/            app chart: deployments, Dapr components, ExternalSecret, HTTPRoutes
 deploy/dapr/local/      Dapr components for docker compose
+deploy/dapr/local-config/  Dapr sidecar configuration (tracing) for docker compose
+deploy/observability/   OpenTelemetry Collector and Grafana provisioning for docker compose
 deploy/helm/sprocketry/values-local.yaml   values for a local cluster (cloud: local)
 deploy/kind/            kind cluster config
 deploy/argocd/          Argo CD application
@@ -216,7 +235,7 @@ scripts/                doctor, kind-up and one-time Azure bootstrap scripts
 ## Roadmap
 
 - [ ] `reviews` service (Rust, Axum) and `profile` service with Keycloak OIDC
-- [ ] OpenTelemetry Collector and Grafana LGTM stack (Dapr tracing is already wired via `observability.otlpEndpoint`)
+- [x] OpenTelemetry Collector and Grafana LGTM stack
 - [ ] SLOs as code and burn-rate alerts
 - [ ] Argo Rollouts canary releases, OpenFeature + flagd for runtime fault toggles
 - [ ] Chaos Mesh experiments
