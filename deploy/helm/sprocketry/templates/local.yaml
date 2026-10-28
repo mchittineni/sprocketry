@@ -11,6 +11,14 @@ metadata:
 stringData:
   catalog-database-url: postgres://{{ $pg.user }}:{{ $pg.password }}@postgres:5432/catalog
   shipping-database-url: postgres://{{ $pg.user }}:{{ $pg.password }}@postgres:5432/shipping
+  reviews-database-url: postgres://{{ $pg.user }}:{{ $pg.password }}@postgres:5432/reviews
+  profile-database-url: postgres://{{ $pg.user }}:{{ $pg.password }}@postgres:5432/profile
+  keycloak-db-url: jdbc:postgresql://postgres:5432/keycloak
+  keycloak-db-username: {{ $pg.user | quote }}
+  keycloak-db-password: {{ $pg.password | quote }}
+  # Local development values; on Azure these come from Key Vault.
+  keycloak-admin-password: admin
+  storefront-client-secret: local-dev-storefront-secret
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -22,6 +30,9 @@ data:
   01-create-databases.sql: |
     CREATE DATABASE catalog;
     CREATE DATABASE shipping;
+    CREATE DATABASE reviews;
+    CREATE DATABASE profile;
+    CREATE DATABASE keycloak;
 ---
 apiVersion: apps/v1
 kind: Deployment

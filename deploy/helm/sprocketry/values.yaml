@@ -34,6 +34,14 @@ secrets:
   - shipping-database-url
   - redis-host
   - redis-password
+  # Read only when auth.enabled.
+  - reviews-database-url
+  - profile-database-url
+  - keycloak-db-url
+  - keycloak-db-username
+  - keycloak-db-password
+  - keycloak-admin-password
+  - storefront-client-secret
 
 observability:
   # OTLP gRPC endpoint for Dapr sidecar traces. Empty sends them to the collector below when it is
@@ -66,6 +74,32 @@ observability:
       limits:
         memory: 2Gi
 
+# Shopper sign-in through Keycloak (OpenID Connect). Turns on the reviews and profile services, and
+# Sign in, Account and reviews on the storefront.
+auth:
+  enabled: false
+  # Addresses as a browser sees them, without a trailing slash. Access tokens name Keycloak's address
+  # as their issuer, and the services accept no other.
+  storefrontUrl: ""   # e.g. http://localhost:8080
+  keycloakUrl: ""     # e.g. http://localhost:8081, or https://shop.example.com/auth behind the gateway
+  # Path Keycloak serves under. Use /auth when it shares the storefront's hostname behind the gateway.
+  keycloakPath: /
+  # Audience the services require in access tokens; the storefront's Keycloak client adds it.
+  audience: sprocketry-api
+  # Keycloak refuses sign-in over plain HTTP from public addresses ("external"); "none" allows it.
+  # Keep "external" and serve the gateway over HTTPS for anything reachable from the internet.
+  sslRequired: external
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    # Only for cloud: local. NodePort that kind maps to http://localhost:8081.
+    nodePort: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+
 # Default-deny ingress for the namespace. App pods then accept only Dapr sidecar traffic
 # (service invocation), plus public services on their app port. Egress is not restricted.
 networkPolicy:
@@ -89,6 +123,8 @@ services:
     public: true
     # Next.js writes its cache here; the root filesystem is read-only.
     writablePaths: [/app/.next/cache]
+    # Signs shoppers in through Keycloak when auth.enabled.
+    oidcClient: true
   catalog:
     port: 8080
     replicas: 2
@@ -122,6 +158,32 @@ services:
     workloadIdentity: true
     env:
       DISPATCH_MAX_DELAY_MS: "500"
+  # The services below need auth.enabled: they check shoppers' Keycloak access tokens (oidc).
+  reviews:
+    port: 8080
+    replicas: 2
+    healthPath: /healthz
+    readyPath: /readyz
+    requiresAuth: true
+    oidc: true
+    secretEnv:
+      DATABASE_URL: reviews-database-url
+  profile:
+    port: 8080
+    replicas: 2
+    healthPath: /healthz
+    readyPath: /readyz
+    requiresAuth: true
+    oidc: true
+    secretEnv:
+      DATABASE_URL: profile-database-url
+    # The JVM needs more headroom than the default.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
 
 resources:
   requests:

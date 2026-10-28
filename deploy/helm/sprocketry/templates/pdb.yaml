@@ -1,6 +1,7 @@
 {{- /* A single-replica service gets no PDB: it could only block drains, not protect availability. */ -}}
+{{- $apps := splitList "," (include "sprocketry.apps" .) }}
 {{- range $name, $svc := .Values.services }}
-{{- if gt (int $svc.replicas) 1 }}
+{{- if and (has $name $apps) (gt (int $svc.replicas) 1) }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

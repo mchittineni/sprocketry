@@ -1,4 +1,6 @@
+{{- $apps := splitList "," (include "sprocketry.apps" .) }}
 {{- range $name, $svc := .Values.services }}
+{{- if has $name $apps }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -86,6 +88,35 @@ spec:
                   name: {{ $.Values.secretName }}
                   key: {{ $key }}
             {{- end }}
+            {{- if and $svc.oidc $.Values.auth.enabled }}
+            # Tokens name Keycloak's public address as issuer; signing keys come from inside the cluster.
+            - name: OIDC_ISSUER
+              value: {{ printf "%s/realms/sprocketry" (required "auth.keycloakUrl is required" $.Values.auth.keycloakUrl) | quote }}
+            - name: OIDC_JWKS_URL
+              value: {{ printf "%s/protocol/openid-connect/certs" (include "sprocketry.realmInternalUrl" $) | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ $.Values.auth.audience | quote }}
+            {{- end }}
+            {{- if and $svc.oidcClient $.Values.auth.enabled }}
+            - name: STOREFRONT_URL
+              value: {{ required "auth.storefrontUrl is required" $.Values.auth.storefrontUrl | quote }}
+            - name: OIDC_DISCOVERY_URL
+              value: {{ include "sprocketry.realmInternalUrl" $ | quote }}
+            - name: OIDC_CLIENT_ID
+              value: storefront
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secretName }}
+                  key: storefront-client-secret
+            {{- end }}
+          # Up to two minutes to start (the JVM services are the slow ones) before liveness takes over.
+          startupProbe:
+            httpGet:
+              path: {{ $svc.healthPath }}
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: {{ $svc.readyPath | default $svc.healthPath }}
@@ -95,10 +126,9 @@ spec:
             httpGet:
               path: {{ $svc.healthPath }}
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 20
           resources:
-            {{- toYaml $.Values.resources | nindent 12 }}
+            {{- toYaml ($svc.resources | default $.Values.resources) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -139,4 +169,5 @@ spec:
       {{- if $nodePort }}
       nodePort: {{ $nodePort }}
       {{- end }}
+{{- end }}
 {{- end }}

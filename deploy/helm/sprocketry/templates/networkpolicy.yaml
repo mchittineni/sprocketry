@@ -1,5 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
-{{- $apps := keys .Values.services | sortAlpha }}
+{{- $apps := splitList "," (include "sprocketry.apps" .) }}
 # Deny all ingress to every pod in the namespace; the policies below open only what is needed.
 # Kubelet health probes come from the node, which Cilium allows regardless of policy.
 apiVersion: networking.k8s.io/v1
@@ -119,6 +119,8 @@ spec:
 {{- end }}
 {{- if eq .Values.cloud "local" }}
 {{- range $store, $port := dict "postgres" 5432 "valkey" 6379 }}
+{{- /* Keycloak keeps its data in Postgres too. */ -}}
+{{- $clients := ternary (append $apps "keycloak") $apps (and $.Values.auth.enabled (eq $store "postgres")) }}
 ---
 # In-cluster {{ $store }} accepts connections from the app pods (and their Dapr sidecars) only.
 apiVersion: networking.k8s.io/v1
@@ -136,7 +138,7 @@ spec:
     - from:
         - podSelector:
             matchExpressions:
-              - { key: app.kubernetes.io/name, operator: In, values: [{{ join ", " $apps }}] }
+              - { key: app.kubernetes.io/name, operator: In, values: [{{ join ", " $clients }}] }
       ports:
         - { port: {{ $port }}, protocol: TCP }
 {{- end }}

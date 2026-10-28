@@ -14,6 +14,16 @@ services:
   shipping: { replicas: 1 }
   payment: { replicas: 1 }
   fulfillment: { replicas: 1 }
+  reviews: { replicas: 1 }
+  profile: { replicas: 1 }
+
+# Sign-in through an in-cluster Keycloak, published by kind on http://localhost:8081.
+auth:
+  enabled: true
+  storefrontUrl: http://localhost:8080
+  keycloakUrl: http://localhost:8081
+  keycloak:
+    nodePort: 30081
 
 # Traces, metrics and logs into an in-cluster Grafana (make grafana).
 observability:

@@ -11,6 +11,15 @@ azure:
 
 gateway:
   enabled: true
+  hostname: shop.example.com
+
+# Sign-in through Keycloak at /auth on the storefront's hostname. Serve the gateway over HTTPS before
+# shoppers use it: the realm refuses sign-in over plain HTTP from the internet (auth.sslRequired).
+auth:
+  enabled: true
+  storefrontUrl: https://shop.example.com
+  keycloakUrl: https://shop.example.com/auth
+  keycloakPath: /auth
 
 # Traces, metrics and logs into an in-cluster Grafana (make grafana).
 observability:
