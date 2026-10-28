@@ -25,6 +25,8 @@ receivers:
                 - shipping:9090
                 - payment:9090
                 - fulfillment:9090
+                - reviews:9090
+                - profile:9090
 
   # docker-compose.yaml tags each log line with its compose service name (logging.options.labels).
   file_log/docker:
