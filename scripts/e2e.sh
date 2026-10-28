@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end checks against the running local stack (`make up`), through the real Dapr sidecars,
-# Valkey, Postgres and Keycloak: cart concurrency, stock limits, that a checkout submitted twice places
-# one order, signing in through the storefront, and that reviews and profile accept only valid tokens.
-# Needs the stack running with PAYMENT_FAILURE_RATE=0.
+# Valkey, Postgres, Keycloak and flagd: cart concurrency, stock limits, that a checkout submitted twice
+# places one order, that fault flags apply at runtime, signing in through the storefront, and that reviews
+# and profile accept only valid tokens. Needs the stack running with every fault off (scripts/fault.sh reset).
 set -euo pipefail
 
 CURL_IMAGE=${CURL_IMAGE:-curlimages/curl:8.17.0}
@@ -76,6 +76,25 @@ if [ -n "$order" ]; then
   if [ "$dispatched" = 1 ]; then echo "ok   order dispatched once"; else echo "FAIL order dispatched $dispatched times"; status=1; fi
 fi
 
+host_check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want $2, got $3"; status=1; fi; }
+
+# ---------- Fault flags ----------
+# A fault switched on takes effect without restarting payment, and switching it off restores checkout.
+checkout() {
+  docker run --rm --network "container:$STOREFRONT" -e C="e2e-fault-$(date +%s)-$RANDOM" "$CURL_IMAGE" sh -c '
+    D=http://localhost:3500/v1.0/invoke
+    curl -s -o /dev/null -X POST -H "content-type: application/json" -d "{\"sku\":\"RB-005\",\"quantity\":1}" "$D/cart/method/cart/$C/items"
+    curl -s -o /dev/null -w "%{http_code}" -X POST -H "content-type: application/json" -d "{\"user_id\":\"e2e\",\"city_id\":1}" "$D/payment/method/pay/$C"'
+}
+# Polls, since flagd and then payment's copy of the flags take a moment to pick the change up.
+checkout_until() { for _ in $(seq 1 15); do got=$(checkout); [ "$got" = "$1" ] && break; sleep 1; done; echo "$got"; }
+trap './scripts/fault.sh reset >/dev/null' EXIT
+./scripts/fault.sh payment-failure-rate all >/dev/null
+host_check "fault flag fails checkouts at runtime" 502 "$(checkout_until 502)"
+./scripts/fault.sh reset >/dev/null
+host_check "clearing the fault restores checkout" 200 "$(checkout_until 200)"
+trap - EXIT
+
 # ---------- Identity ----------
 # A throwaway shopper, and a throwaway client that may exchange a password for a token, so the services
 # can be called with real Keycloak tokens. The storefront's own client allows only the browser flow.
@@ -85,7 +104,6 @@ run=$(date +%s)-$$
 user=e2e-$run
 pass=Pw-$run-x9
 client=e2e-$run
-host_check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want $2, got $3"; status=1; fi; }
 # The first value of a JSON field; good enough for the flat answers used here.
 json_field() { grep -o "\"$1\":\"\{0,1\}[^\",}]*" | head -1 | sed 's/^[^:]*:"\{0,1\}//'; }
 
