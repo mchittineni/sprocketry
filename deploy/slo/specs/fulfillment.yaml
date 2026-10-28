@@ -1,0 +1,28 @@
+# fulfillment SLOs, in Sloth's prometheus/v1 format (https://sloth.dev). `make slo` generates the
+# Prometheus rules in deploy/helm/sprocketry/files/prometheus/rules/fulfillment.yaml from this file.
+# How the SLIs, targets and alerts work: README, "SLOs and alerts".
+# Every total_query ends in "> 0": a window without traffic then records nothing rather than 0/0 = NaN,
+# which would otherwise turn the 30-day SLI and error budget into NaN for a month.
+#
+# Fulfillment only consumes the orders topic, so it has no latency SLO: a slow dispatch delays
+# delivery but no user waits on it. A 5xx makes Dapr redeliver the message, so it still counts.
+version: prometheus/v1
+service: fulfillment
+labels:
+  owner: sprocketry
+slos:
+  - name: requests-availability
+    objective: 99.5
+    description: Order messages are handled without a 5xx.
+    sli:
+      events:
+        error_query: (sum(rate(dapr_http_client_completed_count_total{app_id="fulfillment",status=~"5.."}[{{.window}}])) or vector(0))
+        total_query: sum(rate(dapr_http_client_completed_count_total{app_id="fulfillment"}[{{.window}}])) > 0
+    alerting:
+      name: AvailabilityBudgetBurn
+      annotations:
+        summary: fulfillment is spending its availability error budget too fast
+      page_alert:
+        labels: { severity: page }
+      ticket_alert:
+        labels: { severity: ticket }
