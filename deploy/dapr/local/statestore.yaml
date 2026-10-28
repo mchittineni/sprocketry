@@ -9,4 +9,5 @@ spec:
   metadata:
     - name: redisHost
       value: valkey:6379
-scopes: [cart]
+# cart keeps carts here, storefront keeps sign-in sessions.
+scopes: [cart, storefront]
