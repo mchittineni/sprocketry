@@ -54,7 +54,7 @@ flowchart LR
 | reviews | Rust 1.99, Axum | product ratings and reviews (PostgreSQL); writing one needs a sign-in | ratings |
 | profile | Java 25, Spring Boot 4 | shopper's name and default shipping city (PostgreSQL) | user |
 
-Payment and fulfillment have fault-injection settings (`PAYMENT_FAILURE_RATE`, `PAYMENT_DELAY_MS`, `DISPATCH_MAX_DELAY_MS`) for practising observability and incident response.
+For practising observability and incident response, payment has fault flags (`payment-failure-rate`, `payment-delay-ms`) that change while it runs, and fulfillment has a random dispatch delay (`DISPATCH_MAX_DELAY_MS`).
 
 ## Platform
 
@@ -67,7 +67,8 @@ Payment and fulfillment have fault-injection settings (`PAYMENT_FAILURE_RATE`, `
 | Secrets | plain env | **Azure Key Vault** → External Secrets Operator → Kubernetes Secret |
 | Identity | n/a | AKS workload identity (federated, no stored credentials) |
 | Ingress | port 3000 | Envoy Gateway (Gateway API) |
-| Delivery | `make up` | GitHub Actions (OIDC) → ACR → tag commit → Argo CD |
+| Delivery | `make up` | GitHub Actions (OIDC) → ACR → tag commit → Argo CD → Argo Rollouts canary |
+| Fault flags | flagd container | flagd in the cluster (OpenFeature) |
 | Identity | Keycloak container (localhost:8081) | Keycloak in the cluster, at `/auth` behind the gateway |
 | Observability | OpenTelemetry Collector → Grafana LGTM container | Collector agent per node → in-cluster LGTM, or any OTLP backend |
 | IaC | n/a | **Terraform** (`infra/azure`) |
@@ -98,10 +99,21 @@ make down
 
 `make up-prebuilt` starts the same stack from the images CI publishes to GHCR, so nothing is compiled locally.
 
-To change ports, image source or the fault-injection knobs, copy [.env.example](.env.example) to `.env` and edit it.
-For example, `PAYMENT_FAILURE_RATE=0.2` makes 20% of checkouts fail.
+To change ports or the image source, copy [.env.example](.env.example) to `.env` and edit it.
 
-With the stack running, `make e2e` checks the services together through their real Dapr sidecars: cart updates under concurrency, stock limits, and that a checkout submitted twice places one order.
+### Fault flags
+
+Payment reads two [OpenFeature](https://openfeature.dev) flags on every checkout, served by [flagd](https://flagd.dev) from [faults.json](deploy/helm/sprocketry/files/flagd/faults.json): `payment-failure-rate` fails a share of checkouts with a 502, and `payment-delay-ms` adds latency. Payment evaluates them in-process from a copy flagd streams to it, so a checkout makes no extra call, and without flagd every flag reads its default: no faults. Change them while the stack runs:
+
+```bash
+make fault                                            # list the flags and the variant each serves
+make fault FLAG=payment-failure-rate VARIANT=20pct    # a fifth of checkouts now fail
+./scripts/fault.sh reset                              # every flag back to off
+```
+
+Locally this rewrites `faults.json`, which flagd reloads within a second; `reset` puts it back. On kind it edits the `flagd-flags` ConfigMap, which takes up to a minute to reach flagd. On a cluster Argo CD syncs, change the file in Git instead, because Argo CD reverts edits made in the cluster.
+
+With the stack running, `make e2e` checks the services together through their real Dapr sidecars: cart updates under concurrency, stock limits, that a checkout submitted twice places one order, that a fault flag applies without a restart, and sign-in.
 
 `make test` lints and tests every service, and needs Go, golangci-lint, .NET, Node and Python installed. `make test-docker` runs the same checks in their official toolchain containers instead, including a throwaway PostgreSQL for catalog's database tests (`make test` skips those unless `TEST_DATABASE_URL` points at a disposable database).
 
@@ -118,6 +130,20 @@ make kind-down
 ```
 
 Data lives in `emptyDir` volumes, so it resets when the Postgres or Valkey pods restart.
+
+### Canary releases
+
+With `rollouts.enabled`, each service is an [Argo Rollouts](https://argoproj.github.io/rollouts/) Rollout instead of a Deployment. A new version takes 25% of the service's pods, then 50%, two minutes each, then all of them. There is no traffic router: Dapr spreads calls over every pod of a service, so the weight is the share of pods running the new version (at least one).
+
+For the whole release an analysis queries Prometheus for the share of the new pods' requests that fail with a 5xx, counted by their Dapr sidecars. Above 5% on two measurements, Argo Rollouts aborts the release and scales the new version away, while the old one keeps serving. A window with no requests to the new pods passes, since there is nothing to judge. The storefront has no analysis: browsers reach it directly, not through its sidecar, so its sidecar counts no requests. Its releases step through the weights unchecked.
+
+```bash
+make canary-demo   # about ten minutes, with checkouts running throughout
+```
+
+The demo releases a payment image tagged `faulty`, which the shipped fault flags fail on every checkout, and the analysis rolls it back. It then reverts, as you would revert the commit, and releases a good version, which is promoted. `kubectl argo rollouts get rollout payment -n sprocketry --watch` shows a release step by step, if you have the [kubectl plugin](https://argoproj.github.io/argo-rollouts/installation/#kubectl-plugin-installation).
+
+Switching an existing install to Rollouts replaces each Deployment with a Rollout, so the services restart once.
 
 ## Sign-in
 
@@ -171,7 +197,7 @@ Each SLO has two multiwindow, multi-burn-rate alerts, following the Google SRE W
 | `severity: page` | 14.4x, or 6x | 1h and 5m, or 6h and 30m | 2% of the month's budget gone in an hour, or 5% in six hours. Act now. |
 | `severity: ticket` | 3x, or 1x | 1d and 2h, or 3d and 6h | On course to spend the budget before the month ends. Look during working hours. |
 
-The short window makes an alert clear soon after the problem stops, and the long one keeps a brief spike from paging anyone. The alerts show in the **Sprocketry SLOs** dashboard and under Alerting → Alert rules (data source-managed). There is no Alertmanager, so nothing is sent anywhere yet. To try one, start the stack with `PAYMENT_FAILURE_RATE=0.3` and place some orders: the payment availability page alert fires within a few minutes.
+The short window makes an alert clear soon after the problem stops, and the long one keeps a brief spike from paging anyone. The alerts show in the **Sprocketry SLOs** dashboard and under Alerting → Alert rules (data source-managed). There is no Alertmanager, so nothing is sent anywhere yet. To try one, run `make fault FLAG=payment-failure-rate VARIANT=20pct` and place some orders: the payment availability page alert fires within a few minutes.
 
 Error budget policy:
 
@@ -253,7 +279,7 @@ The chart adds PodDisruptionBudgets for services with more than one replica. It 
 
 1. A push to `main` that touches a service builds and scans only the services that changed, then pushes each image tagged with the commit SHA.
 2. Once every build succeeds, the `promote` job pins those services to that SHA in [values-image-tags.yaml](deploy/helm/sprocketry/values-image-tags.yaml) and commits the file to `main`.
-3. Argo CD sees the commit and rolls out the new image. Services that haven't changed keep their pinned tags.
+3. Argo CD sees the commit and updates each changed service's Rollout, which releases the new image as a canary (see [Canary releases](#canary-releases)) and rolls it back if its requests fail. Services that haven't changed keep their pinned tags.
 
 To roll back, revert the promote commit. If `main` is protected, allow `github-actions[bot]` to push to it, or change the promote step to open a PR.
 
@@ -299,7 +325,7 @@ deploy/gateway/         Gateway API entry point
 infra/azure/modules/    network, aks, postgres, redis, servicebus, keyvault, workload-identity
 infra/azure/envs/dev/   dev environment composition
 loadgen/                k6 scenarios
-scripts/                doctor, kind-up and one-time Azure bootstrap scripts
+scripts/                doctor, kind-up, e2e, fault flags, canary demo and one-time Azure bootstrap scripts
 ```
 
 ## Roadmap
@@ -307,7 +333,7 @@ scripts/                doctor, kind-up and one-time Azure bootstrap scripts
 - [x] `reviews` service (Rust, Axum) and `profile` service with Keycloak OIDC
 - [x] OpenTelemetry Collector and Grafana LGTM stack
 - [x] SLOs as code and burn-rate alerts
-- [ ] Argo Rollouts canary releases, OpenFeature + flagd for runtime fault toggles
+- [x] Argo Rollouts canary releases, OpenFeature + flagd for runtime fault toggles
 - [ ] Chaos Mesh experiments
 - [ ] Kyverno policies, image signing with Cosign, SBOMs
 - [ ] `assistant` service: RAG over the catalog with pgvector
