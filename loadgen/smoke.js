@@ -1,4 +1,5 @@
-// k6 smoke/load test through the storefront: browse, add to cart, view cart.
+// k6 smoke/load test through the storefront: browse the catalog, view the cart.
+// Adding to cart and checkout are server actions, which this test does not drive.
 // Run: k6 run loadgen/smoke.js   (BASE_URL defaults to the local compose stack)
 import http from 'k6/http';
 import { check, sleep } from 'k6';
