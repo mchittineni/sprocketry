@@ -15,3 +15,11 @@ INSERT INTO products (sku, name, description, category, price, stock) VALUES
     ('RB-005', 'Arm Kit',        'Six-axis desktop robotic arm',        'maker',       249.00, 60),
     ('RB-006', 'Sentinel',       'Perimeter security patrol unit',      'industrial', 1899.00,  0)
 ON CONFLICT (sku) DO NOTHING;
+
+-- Stock held for a placed order. The primary key makes reserving an order idempotent.
+CREATE TABLE IF NOT EXISTS reservations (
+    order_id TEXT NOT NULL,
+    sku      TEXT NOT NULL REFERENCES products (sku),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (order_id, sku)
+);
