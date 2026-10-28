@@ -21,6 +21,14 @@ flowchart LR
   storefront -- invoke --> cart[cart<br/>.NET 9]
   storefront -- invoke --> shipping[shipping<br/>NestJS]
   storefront -- invoke --> payment[payment<br/>FastAPI]
+  storefront -- "invoke + token" --> reviews[reviews<br/>Rust, Axum]
+  storefront -- "invoke + token" --> profile[profile<br/>Java, Spring Boot]
+  user -. sign in .-> kc[Keycloak]
+  storefront -. OIDC .-> kc
+  reviews -. signing keys .-> kc
+  profile -. signing keys .-> kc
+  reviews -- invoke --> catalog
+  profile -- invoke --> shipping
   cart -- invoke --> catalog
   payment -- invoke --> cart
   payment -- invoke --> shipping
@@ -28,6 +36,9 @@ flowchart LR
   bus --> fulfillment[fulfillment<br/>Go]
   catalog --> pg[(PostgreSQL)]
   shipping --> pg
+  reviews --> pg
+  profile --> pg
+  kc --> pg
   cart --> redis[(Managed Redis<br/>state store)]
   kv[(Key Vault)] -. External Secrets .-> catalog & shipping & cart
 ```
@@ -40,6 +51,8 @@ flowchart LR
 | shipping | TypeScript, NestJS 12 | cities, distance pricing (PostgreSQL) | shipping |
 | payment | Python 3.14, FastAPI | checkout, publishes `OrderPlaced` | payment |
 | fulfillment | Go 1.27 | consumes `orders` topic | dispatch |
+| reviews | Rust 1.99, Axum | product ratings and reviews (PostgreSQL); writing one needs a sign-in | ratings |
+| profile | Java 25, Spring Boot 4 | shopper's name and default shipping city (PostgreSQL) | user |
 
 Payment and fulfillment have fault-injection settings (`PAYMENT_FAILURE_RATE`, `PAYMENT_DELAY_MS`, `DISPATCH_MAX_DELAY_MS`) for practising observability and incident response.
 
@@ -55,6 +68,7 @@ Payment and fulfillment have fault-injection settings (`PAYMENT_FAILURE_RATE`, `
 | Identity | n/a | AKS workload identity (federated, no stored credentials) |
 | Ingress | port 3000 | Envoy Gateway (Gateway API) |
 | Delivery | `make up` | GitHub Actions (OIDC) → ACR → tag commit → Argo CD |
+| Identity | Keycloak container (localhost:8081) | Keycloak in the cluster, at `/auth` behind the gateway |
 | Observability | OpenTelemetry Collector → Grafana LGTM container | Collector agent per node → in-cluster LGTM, or any OTLP backend |
 | IaC | n/a | **Terraform** (`infra/azure`) |
 
@@ -77,6 +91,7 @@ Requires only Docker.
 make up            # builds all images and starts the stack
 open http://localhost:3000
 open http://localhost:3001   # Grafana (admin/admin): Sprocketry → Sprocketry services
+open http://localhost:8081/admin   # Keycloak admin console (admin/admin)
 make smoke         # k6 load test; uses the grafana/k6 container if k6 isn't installed
 make down
 ```
@@ -103,6 +118,19 @@ make kind-down
 ```
 
 Data lives in `emptyDir` volumes, so it resets when the Postgres or Valkey pods restart.
+
+## Sign-in
+
+Shoppers sign in with [Keycloak](https://www.keycloak.org) through OpenID Connect. Select **Sign in** on the storefront, then **Register** on Keycloak's page to create a shopper. Signed in, you can review robots on their product pages, and set a name and default shipping city under your account, which checkout then preselects.
+
+- **Storefront:** authorization code flow with PKCE, as a confidential client. Tokens never reach the browser: the session lives in the Dapr state store, and the browser holds only a random session id in an `httpOnly` cookie. Access tokens refresh shortly before they expire, and **Sign out** ends the Keycloak session too.
+- **reviews and profile** check every access token themselves: RS256 signature against Keycloak's published keys, exact issuer, the `sprocketry-api` audience, and expiry. The storefront forwards the token through Dapr service invocation. Reading reviews needs no sign-in.
+- **The realm** is code: [deploy/helm/sprocketry/files/keycloak/sprocketry-realm.json](deploy/helm/sprocketry/files/keycloak/sprocketry-realm.json), imported on Keycloak's first start by both the local stack and the chart. Its client secret and storefront address come from the environment.
+- **Addresses:** browsers reach Keycloak at its public address, which tokens name as their issuer, while services reach it inside the network. Keycloak answers each with the right one (`KC_HOSTNAME` plus dynamic back-channel URLs).
+
+On Kubernetes, `auth.enabled` turns this on, together with the reviews and profile services. kind publishes Keycloak on http://localhost:8081 (an existing kind cluster needs `make kind-down` first to pick up the new port). On Azure, Keycloak shares the storefront's hostname at `/auth`, and its secrets and databases come from Terraform and Key Vault. Serve the gateway over HTTPS before real use: the realm refuses sign-in over plain HTTP from the internet. Keycloak runs one replica, and on Azure it uses the PostgreSQL admin login, because azurerm can't create database roles. Both are fine for a dev environment and worth changing for anything longer-lived.
+
+`make e2e` signs in through the storefront the way a browser does, and checks that reviews and profile refuse missing, wrong-realm and wrong-audience tokens.
 
 ## Observability
 
@@ -131,6 +159,8 @@ Each SLI is measured by the Dapr sidecar, over the requests it delivers to its a
 | shipping | 99.5% | 99% within 250ms |
 | payment | 99.5% | 99% within 1s |
 | fulfillment | 99.5% | none: it consumes the orders topic and no user waits on it |
+| reviews | 99.5% | 99% within 250ms |
+| profile | 99.5% | 99% within 250ms |
 
 The storefront has no SLO yet: browser traffic reaches it directly, not through its sidecar. These targets are a starting point, not measured from history. Revisit them each quarter: tighten an SLO that never spends budget, and loosen one (or fix the service) that keeps running out.
 
@@ -274,7 +304,7 @@ scripts/                doctor, kind-up and one-time Azure bootstrap scripts
 
 ## Roadmap
 
-- [ ] `reviews` service (Rust, Axum) and `profile` service with Keycloak OIDC
+- [x] `reviews` service (Rust, Axum) and `profile` service with Keycloak OIDC
 - [x] OpenTelemetry Collector and Grafana LGTM stack
 - [x] SLOs as code and burn-rate alerts
 - [ ] Argo Rollouts canary releases, OpenFeature + flagd for runtime fault toggles
