@@ -39,6 +39,16 @@ spec:
         dapr.io/log-as-json: "true"
     spec:
       serviceAccountName: {{ $name }}
+      # Spread replicas over nodes, so losing or draining one node doesn't take a whole service down.
+      # ScheduleAnyway keeps pods schedulable on a single-node cluster such as kind.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $name }}
+          matchLabelKeys: [pod-template-hash]
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
