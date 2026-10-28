@@ -14,3 +14,11 @@ services:
   shipping: { replicas: 1 }
   payment: { replicas: 1 }
   fulfillment: { replicas: 1 }
+
+# Traces, metrics and logs into an in-cluster Grafana (make grafana).
+observability:
+  environment: local
+  collector:
+    enabled: true
+  lgtm:
+    enabled: true

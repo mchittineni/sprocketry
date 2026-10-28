@@ -36,9 +36,35 @@ secrets:
   - redis-password
 
 observability:
-  # OTLP gRPC endpoint for Dapr sidecar traces. Empty disables tracing.
+  # OTLP gRPC endpoint for Dapr sidecar traces. Empty sends them to the collector below when it is
+  # enabled, and otherwise disables tracing.
   otlpEndpoint: ""
   samplingRate: "1"
+  # Recorded on every signal as deployment.environment.name.
+  environment: dev
+  # OpenTelemetry Collector agent on every node: Dapr traces and metrics, and container logs.
+  collector:
+    enabled: false
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    # OTLP gRPC endpoint to forward to. Empty uses the in-cluster LGTM below.
+    exportEndpoint: ""
+    exportInsecure: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 384Mi
+  # Grafana, Loki, Tempo and Prometheus in one pod. Suits a dev cluster; data does not survive restarts.
+  lgtm:
+    enabled: false
+    image: grafana/otel-lgtm:0.36.0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
 
 # Default-deny ingress for the namespace. App pods then accept only Dapr sidecar traffic
 # (service invocation), plus public services on their app port. Egress is not restricted.

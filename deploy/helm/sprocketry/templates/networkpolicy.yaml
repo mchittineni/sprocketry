@@ -52,6 +52,71 @@ spec:
         - { port: {{ $svc.port }}, protocol: TCP }
 {{- end }}
 {{- end }}
+{{- if .Values.observability.collector.enabled }}
+---
+# Sidecars send traces to the collector agent on their node.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-otlp-to-collector
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/name, operator: In, values: [{{ join ", " $apps }}] }
+      ports:
+        - { port: 4317, protocol: TCP }
+        - { port: 4318, protocol: TCP }
+---
+# The collector scrapes each Dapr sidecar's metrics port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-scrape
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [{{ join ", " $apps }}] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - { port: 9090, protocol: TCP }
+{{- if .Values.observability.lgtm.enabled }}
+---
+# Only the collector writes to LGTM. Grafana is reached with kubectl port-forward, which policies don't see.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collector-to-lgtm
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lgtm
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - { port: 4317, protocol: TCP }
+{{- end }}
+{{- end }}
 {{- if eq .Values.cloud "local" }}
 {{- range $store, $port := dict "postgres" 5432 "valkey" 6379 }}
 ---

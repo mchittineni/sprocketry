@@ -1,0 +1,347 @@
+{{- $obs := .Values.observability }}
+{{- if $obs.collector.enabled }}
+{{- $exportEndpoint := $obs.collector.exportEndpoint | default (ternary "lgtm:4317" "" $obs.lgtm.enabled) }}
+{{- if not $exportEndpoint }}{{ fail "observability.collector.exportEndpoint is required when observability.lgtm.enabled is false" }}{{ end }}
+# OpenTelemetry Collector, one agent per node. Each agent handles only its own node's pods:
+#   traces   OTLP from the Dapr sidecars (the Service keeps traffic on the node)
+#   metrics  scraped from each Dapr sidecar's Prometheus endpoint
+#   logs     container log files under /var/log/pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+---
+# Read-only access to this namespace's pods, for log metadata and for finding sidecars to scrape.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+      prometheus/dapr:
+        config:
+          scrape_configs:
+            - job_name: dapr
+              scrape_interval: 15s
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names: [{{ .Release.Namespace }}]
+                  selectors:
+                    - role: pod
+                      field: spec.nodeName=${env:K8S_NODE_NAME}
+              relabel_configs:
+                # The Dapr injector exposes each sidecar's metrics on a port named dapr-metrics.
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  regex: dapr-metrics
+                  action: keep
+
+      file_log/pods:
+        include: [/var/log/pods/{{ .Release.Namespace }}_*/*/*.log]
+        exclude: [/var/log/pods/{{ .Release.Namespace }}_otel-collector-*/*/*.log]
+        include_file_path: true
+        # Read from the start; file_storage remembers offsets, so a restart doesn't resend lines.
+        start_at: beginning
+        storage: file_storage
+        operators:
+          # Parses the CRI log format and sets k8s.pod.name, k8s.pod.uid, k8s.container.name.
+          - type: container
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+      # Logs are named like the local stack: the app's name, or <app>-dapr for its sidecar.
+      k8sattributes:
+        filter:
+          namespace: {{ .Release.Namespace }}
+          node_from_env_var: K8S_NODE_NAME
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+        extract:
+          metadata: [k8s.deployment.name, k8s.node.name]
+          labels:
+            - tag_name: service.name
+              key: app.kubernetes.io/name
+              from: pod
+      transform/logs:
+        log_statements:
+          - context: resource
+            statements:
+              - set(attributes["service.name"], Concat([attributes["service.name"], "dapr"], "-")) where attributes["k8s.container.name"] == "daprd"
+      # Dapr labels sidecar metrics with app_id; make it the service name, as for traces and logs.
+      transform/metrics:
+        metric_statements:
+          - context: datapoint
+            statements:
+              - set(resource.attributes["service.name"], attributes["app_id"]) where attributes["app_id"] != nil
+      resource:
+        attributes:
+          - key: deployment.environment.name
+            value: {{ $obs.environment | quote }}
+            action: upsert
+      batch:
+
+    exporters:
+      otlp_grpc:
+        endpoint: {{ $exportEndpoint }}
+        tls:
+          insecure: {{ $obs.collector.exportInsecure }}
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      file_storage:
+        directory: /var/lib/otelcol
+        create_directory: true
+
+    service:
+      extensions: [health_check, file_storage]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp_grpc]
+        metrics:
+          receivers: [otlp, prometheus/dapr]
+          processors: [memory_limiter, transform/metrics, resource, batch]
+          exporters: [otlp_grpc]
+        logs:
+          receivers: [otlp, file_log/pods]
+          processors: [memory_limiter, k8sattributes, transform/logs, resource, batch]
+          exporters: [otlp_grpc]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        {{- include "sprocketry.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ $obs | toJson | sha256sum }}
+    spec:
+      serviceAccountName: otel-collector
+      securityContext:
+        # Container log files on the node are readable by root only.
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-collector
+          image: {{ $obs.collector.image }}
+          args: ["--config=/etc/otelcol/config.yaml"]
+          env:
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+          readinessProbe:
+            httpGet: { path: /, port: 13133 }
+          livenessProbe:
+            httpGet: { path: /, port: 13133 }
+          resources:
+            {{- toYaml $obs.collector.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: config, mountPath: /etc/otelcol, readOnly: true }
+            - { name: pod-logs, mountPath: /var/log/pods, readOnly: true }
+            - { name: state, mountPath: /var/lib/otelcol }
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector
+        - name: pod-logs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        # Log read offsets live on the node, so they survive the agent being replaced.
+        - name: state
+          hostPath:
+            path: /var/lib/otelcol/{{ .Release.Namespace }}
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  # Every node runs an agent, so a sidecar always sends to the one beside it.
+  internalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
+{{- end }}
+{{- if $obs.lgtm.enabled }}
+---
+# Grafana with Loki, Tempo and Prometheus in one pod, for a dev cluster. Data lives in the pod and is
+# lost when it restarts; point observability.collector.exportEndpoint at a managed backend instead
+# for anything longer-lived. Reach Grafana with `make grafana` (admin/admin).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lgtm
+  labels:
+    app.kubernetes.io/name: lgtm
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lgtm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lgtm
+        {{- include "sprocketry.labels" . | nindent 8 }}
+      annotations:
+        checksum/dashboards: {{ .Files.Glob "files/dashboards/*.json" | toString | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: lgtm
+          image: {{ $obs.lgtm.image }}
+          ports:
+            - { name: grafana, containerPort: 3000 }
+            - { name: otlp-grpc, containerPort: 4317 }
+          readinessProbe:
+            exec:
+              command: [test, -f, /tmp/ready]
+            periodSeconds: 10
+          resources:
+            {{- toYaml $obs.lgtm.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: data, mountPath: /data }
+            - { name: tempo, mountPath: /var/tempo }
+            - name: dashboards-provider
+              mountPath: /otel-lgtm/grafana/conf/provisioning/dashboards/sprocketry.yaml
+              subPath: sprocketry.yaml
+              readOnly: true
+            - { name: dashboards, mountPath: /otel-lgtm/sprocketry-dashboards, readOnly: true }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: data, emptyDir: {} }
+        - { name: tempo, emptyDir: {} }
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards
+            items: [{ key: provider, path: sprocketry.yaml }]
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+            items:
+              {{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+              - { key: {{ base $path }}, path: {{ base $path }} }
+              {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  provider: |
+    apiVersion: 1
+    providers:
+      - name: sprocketry
+        folder: Sprocketry
+        type: file
+        options:
+          path: /otel-lgtm/sprocketry-dashboards
+  {{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lgtm
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: lgtm
+  ports:
+    - { name: grafana, port: 3000, targetPort: grafana }
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+{{- end }}
