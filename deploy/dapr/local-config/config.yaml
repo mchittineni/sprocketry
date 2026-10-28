@@ -13,3 +13,7 @@ spec:
       protocol: grpc
   metric:
     enabled: true
+    # Label HTTP metrics by method and status only. With the path as a label, every cart ID becomes its
+    # own series that sees one request, so rate() reads near zero for cart, payment and shipping.
+    http:
+      increasedCardinality: false
