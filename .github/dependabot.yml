@@ -1,4 +1,6 @@
 # Workflow actions are pinned to commit SHAs; Dependabot opens PRs that bump the SHA and its version comment.
+# Everything else is grouped into one PR per ecosystem a month. The cooldown waits two weeks after a release
+# before proposing it, so a bad or compromised version has time to be caught and pulled first.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -7,4 +9,71 @@ updates:
       interval: semiannually
     groups:
       actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directories: [/services/storefront, /services/shipping]
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      npm:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directories: [/services/catalog, /services/fulfillment]
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /services/payment
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directories: [/services/cart, /services/cart/tests]
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      dotnet:
+        patterns: ["*"]
+
+  # Base images in each service's Dockerfile.
+  - package-ecosystem: docker
+    directories:
+      - /services/storefront
+      - /services/catalog
+      - /services/cart
+      - /services/shipping
+      - /services/payment
+      - /services/fulfillment
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      images:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directory: /infra/azure/envs/dev
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      terraform:
         patterns: ["*"]
