@@ -1,4 +1,4 @@
-.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
+.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e grafana test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
 .DEFAULT_GOAL := help
 
 TF_DIR := infra/azure/envs/dev
@@ -80,6 +80,9 @@ kind-up: ## Run the app on a local kind cluster (storefront on http://localhost:
 
 kind-down: ## Delete the kind cluster
 	kind delete cluster --name $(or $(CLUSTER),sprocketry)
+
+grafana: ## Open Grafana from the cluster in the current kube context on http://localhost:3001 (admin/admin)
+	kubectl -n sprocketry port-forward svc/lgtm 3001:3000
 
 # ---------- Azure ----------
 azure-destroy: ## Delete every Azure resource Terraform created (state storage is kept)
