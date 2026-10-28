@@ -19,6 +19,8 @@
 
   <properties>
     <java.version>25</java.version>
+    <!-- Boot 4.1.1 ships Tomcat 11.0.24 (CVE-2026-65182, -65637, -65905, -68525). Drop this once Boot is 4.1.2 or later. -->
+    <tomcat.version>11.0.27</tomcat.version>
   </properties>
 
   <dependencies>
