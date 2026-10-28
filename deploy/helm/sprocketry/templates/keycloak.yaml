@@ -1,0 +1,176 @@
+{{- if .Values.auth.enabled }}
+{{- $kc := .Values.auth.keycloak }}
+{{- $path := include "sprocketry.keycloakPath" . }}
+{{- if and .Values.gateway.enabled (eq $path "/") }}{{ fail "auth.keycloakPath must not be / when gateway.enabled: Keycloak shares the storefront's hostname, e.g. /auth" }}{{ end }}
+# Keycloak signs shoppers in. It imports the sprocketry realm (files/keycloak) on first start; the
+# realm's client secret and redirect address come from the environment below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  sprocketry-realm.json: |
+    {{- .Files.Get "files/keycloak/sprocketry-realm.json" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels:
+    app.kubernetes.io/name: keycloak
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  # One replica: more need Keycloak's distributed cache configured.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+        {{- include "sprocketry.labels" . | nindent 8 }}
+      annotations:
+        checksum/realm: {{ .Files.Get "files/keycloak/sprocketry-realm.json" | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if eq .Values.cloud "local" }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.local.postgres.image }}
+          command: ["sh", "-c", "until pg_isready -h postgres -U {{ .Values.local.postgres.user }}; do sleep 2; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      {{- end }}
+      containers:
+        - name: keycloak
+          image: {{ $kc.image }}
+          args: ["start", "--import-realm"]
+          env:
+            - { name: KC_DB, value: postgres }
+            - name: KC_DB_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: keycloak-db-url } }
+            - name: KC_DB_USERNAME
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: keycloak-db-username } }
+            - name: KC_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: keycloak-db-password } }
+            - { name: KC_HTTP_ENABLED, value: "true" }
+            # Browsers use the public address; pods reach Keycloak as keycloak:8080, so back-channel
+            # endpoints (tokens, signing keys) answer with whichever address was called.
+            - name: KC_HOSTNAME
+              value: {{ required "auth.keycloakUrl is required" .Values.auth.keycloakUrl | quote }}
+            - { name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC, value: "true" }
+            - { name: KC_HTTP_RELATIVE_PATH, value: {{ trimSuffix "/" $path | default "/" | quote }} }
+            # Behind the gateway, the client's address and scheme come from X-Forwarded-* headers.
+            - { name: KC_PROXY_HEADERS, value: xforwarded }
+            - { name: KC_HEALTH_ENABLED, value: "true" }
+            - { name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin }
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: keycloak-admin-password } }
+            # Read by the realm import.
+            - name: STOREFRONT_URL
+              value: {{ required "auth.storefrontUrl is required" .Values.auth.storefrontUrl | quote }}
+            - name: STOREFRONT_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: storefront-client-secret } }
+            - { name: KC_REALM_SSL_REQUIRED, value: {{ .Values.auth.sslRequired | quote }} }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 9000 }
+          # The first start builds Keycloak's optimized configuration, which takes a while.
+          startupProbe:
+            httpGet: { path: {{ $path }}health/started, port: management }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: {{ $path }}health/ready, port: management }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: {{ $path }}health/live, port: management }
+            periodSeconds: 20
+          resources:
+            {{- toYaml $kc.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # `kc.sh start` writes its optimized build under /opt/keycloak on first start, so the root
+            # filesystem stays writable. A pre-built image (kc.sh build) would allow read-only.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: realm, mountPath: /opt/keycloak/data/import, readOnly: true }
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  {{- $nodePort := and (eq .Values.cloud "local") $kc.nodePort }}
+  {{- if $nodePort }}
+  type: NodePort
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      {{- if $nodePort }}
+      nodePort: {{ $nodePort }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Browsers reach Keycloak's sign-in pages, and the storefront, reviews and profile call it for tokens and
+# signing keys. Its management port (health) is reached by the kubelet only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { port: 8080, protocol: TCP }
+{{- end }}
+{{- if .Values.gateway.enabled }}
+---
+# Keycloak shares the storefront's hostname under its path, e.g. https://shop.example.com/auth.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: keycloak
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.gateway.namespace }}
+  {{- with .Values.gateway.hostname }}
+  hostnames: [{{ . | quote }}]
+  {{- end }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: {{ trimSuffix "/" $path | quote }} }
+      backendRefs:
+        - name: keycloak
+          port: 8080
+{{- end }}
+{{- end }}

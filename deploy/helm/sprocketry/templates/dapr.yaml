@@ -65,7 +65,8 @@ spec:
       value: "true"
 auth:
   secretStore: kubernetes
-scopes: [cart]
+# cart keeps carts here, storefront keeps sign-in sessions.
+scopes: [cart, storefront]
 {{- else if eq .Values.cloud "local" }}
 ---
 # Local cluster: the same component names backed by the in-cluster Valkey from local.yaml.
@@ -95,5 +96,6 @@ spec:
   metadata:
     - name: redisHost
       value: valkey:6379
-scopes: [cart]
+# cart keeps carts here, storefront keeps sign-in sessions.
+scopes: [cart, storefront]
 {{- end }}
