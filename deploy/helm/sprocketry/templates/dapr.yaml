@@ -5,7 +5,8 @@ metadata:
   labels:
     {{- include "sprocketry.labels" . | nindent 4 }}
 spec:
-  {{- with .Values.observability.otlpEndpoint }}
+  {{- $collector := ternary (printf "otel-collector.%s.svc.cluster.local:4317" .Release.Namespace) "" .Values.observability.collector.enabled }}
+  {{- with .Values.observability.otlpEndpoint | default $collector }}
   tracing:
     samplingRate: {{ $.Values.observability.samplingRate | quote }}
     otel:
