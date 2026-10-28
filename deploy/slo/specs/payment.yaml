@@ -10,7 +10,7 @@ labels:
 slos:
   - name: requests-availability
     objective: 99.5
-    description: Checkouts succeed. PAYMENT_FAILURE_RATE spends this budget on purpose.
+    description: Checkouts succeed. The payment-failure-rate fault flag spends this budget on purpose.
     sli:
       events:
         error_query: (sum(rate(dapr_http_client_completed_count_total{app_id="payment",status=~"5.."}[{{.window}}])) or vector(0))
@@ -27,7 +27,7 @@ slos:
     objective: 99
     description: >-
       Checkouts complete within 1s, including the calls payment makes to cart, catalog and shipping.
-      PAYMENT_DELAY_MS spends this budget on purpose.
+      The payment-delay-ms fault flag spends this budget on purpose.
     sli:
       events:
         error_query: >-

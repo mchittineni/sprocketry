@@ -6,7 +6,7 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # PAYMENT_FAILURE_RATE=0.2: a fifth of checkouts fail, a 40x burn. Both alerts fire.
+  # payment-failure-rate at 20pct: a fifth of checkouts fail, a 40x burn. Both alerts fire.
   - interval: 1m
     input_series:
       - series: dapr_http_client_completed_count_total{app_id="payment",method="POST",status="200"}
@@ -98,7 +98,7 @@ tests:
               summary: cart is spending its availability error budget too fast
               title: (ticket) cart requests-availability SLO error budget burn rate is too fast.
 
-  # PAYMENT_DELAY_MS=1500: every checkout takes longer than the 1s threshold.
+  # payment-delay-ms at 1500ms: every checkout takes longer than the 1s threshold.
   - interval: 1m
     input_series:
       - series: dapr_http_client_roundtrip_latency_bucket{app_id="payment",le="1000"}
