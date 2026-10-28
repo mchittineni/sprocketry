@@ -1,4 +1,4 @@
-.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e grafana slo slo-test test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
+.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e fault grafana slo slo-test test test-docker kind-up canary-demo kind-down azure-destroy tf-validate helm-lint
 .DEFAULT_GOAL := help
 
 TF_DIR := infra/azure/envs/dev
@@ -46,6 +46,9 @@ TEST_NET := sprocketry-test
 e2e: ## End-to-end checks through the real Dapr sidecars against the running local stack
 	./scripts/e2e.sh
 
+fault: ## Toggle a fault flag at runtime: make fault FLAG=payment-failure-rate VARIANT=20pct (no args lists them)
+	./scripts/fault.sh $(if $(FLAG),$(FLAG) $(VARIANT))
+
 test: ## Lint and test every service (needs Go, golangci-lint, .NET, Node and Python; see test-docker)
 	cd services/catalog && test -z "$$(gofmt -l .)" && golangci-lint run ./... && go test -race ./...
 	cd services/fulfillment && test -z "$$(gofmt -l .)" && golangci-lint run ./... && go test -race ./...
@@ -84,7 +87,7 @@ test-docker: ## Lint and test every service, using only Docker
 	$(call in_container,cart,mcr.microsoft.com/dotnet/sdk:10.0,dotnet build -c Release -warnaserror && dotnet format Cart.csproj --verify-no-changes && cd tests && dotnet test -c Release)
 	$(call in_container,shipping,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
 	$(call in_container,storefront,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
-	$(call in_container,payment,python:3.14-slim,python -m venv /tmp/venv && /tmp/venv/bin/pip install -q ".[dev]" && /tmp/venv/bin/ruff check . && /tmp/venv/bin/ruff format --check . && /tmp/venv/bin/pytest -q -p no:cacheprovider)
+	$(call in_container,payment,python:3.14-slim,python -m venv /tmp/venv && /tmp/venv/bin/pip install -q ".[dev]" && /tmp/venv/bin/ruff check . && /tmp/venv/bin/ruff format --check . && /tmp/venv/bin/pytest -q -p no:cacheprovider,-v $(CURDIR)/deploy/helm/sprocketry/files/flagd:/flags:ro -e FLAGS_FILE=/flags/faults.json)
 	$(call with_test_db,reviews,rust:1.99-slim-trixie,CARGO_HOME=/tmp/cargo cargo fmt --check && CARGO_HOME=/tmp/cargo cargo clippy --all-targets --locked -- -D warnings && CARGO_HOME=/tmp/cargo cargo test --locked)
 	$(call with_test_db,profile,maven:3.9.16-eclipse-temurin-25,mvn -B -q -Dmaven.repo.local=/tmp/m2 verify)
 
@@ -103,6 +106,9 @@ slo-test: slo ## Regenerate the SLO rules, validate them and run the burn-rate a
 # ---------- Local Kubernetes (kind) ----------
 kind-up: ## Run the app on a local kind cluster (storefront on http://localhost:8080)
 	./scripts/kind-up.sh
+
+canary-demo: ## Release a faulty payment to the kind cluster and watch Argo Rollouts roll it back, then a good one
+	./scripts/canary-demo.sh
 
 kind-down: ## Delete the kind cluster
 	kind delete cluster --name $(or $(CLUSTER),sprocketry)
