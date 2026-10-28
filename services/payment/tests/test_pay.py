@@ -1,9 +1,20 @@
+import os
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from openfeature import api
+from openfeature.contrib.provider.flagd import FlagdProvider
+from openfeature.contrib.provider.flagd.config import ResolverType
+from openfeature.evaluation_context import EvaluationContext
+from openfeature.provider.in_memory_provider import InMemoryFlag, InMemoryProvider
 
-import payment.main
 from payment.main import app, get_dapr
+
+# The fault flags the chart and the local stack serve. make test-docker mounts them at FLAGS_FILE.
+SERVICE_DIR = Path(__file__).resolve().parents[1]
+FLAGS_FILE = Path(os.getenv("FLAGS_FILE") or SERVICE_DIR / "../../deploy/helm/sprocketry/files/flagd/faults.json")
 
 CART = {
     "id": "c1",
@@ -60,6 +71,17 @@ def client_with():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def reset_flags():
+    yield
+    api.clear_providers()
+    api.clear_evaluation_context()
+
+
+def set_flags(**values):
+    api.set_provider(InMemoryProvider({key: InMemoryFlag("on", {"on": value}) for key, value in values.items()}))
+
+
 def test_pay_publishes_order_and_clears_cart(client_with):
     fake = FakeDapr(CART)
     resp = client_with(fake).post("/pay/c1", json=CHECKOUT)
@@ -97,8 +119,8 @@ def test_unknown_city_is_rejected(client_with):
     assert not fake.deleted
 
 
-def test_injected_decline_places_no_order(client_with, monkeypatch):
-    monkeypatch.setattr(payment.main, "FAILURE_RATE", 1.0)
+def test_injected_decline_places_no_order(client_with):
+    set_flags(**{"payment-failure-rate": 1.0})
     fake = FakeDapr(CART)
     resp = client_with(fake).post("/pay/c1", json=CHECKOUT)
 
@@ -161,3 +183,22 @@ def test_totals_are_exact_to_the_penny(client_with):
     body = client_with(fake).post("/pay/c1", json=CHECKOUT).json()
 
     assert body["total"] == 0.3
+
+
+def test_without_flags_there_are_no_faults(client_with):
+    resp = client_with(FakeDapr(CART)).post("/pay/c1", json=CHECKOUT)
+
+    assert resp.status_code == 200
+
+
+# The shipped flags: no faults by default, and every checkout fails on a version named faulty*, which
+# scripts/canary-demo.sh uses to release a bad canary.
+@pytest.mark.parametrize(("version", "status"), [("1.4.0", 200), ("faulty", 502), ("faulty-2", 502)])
+def test_shipped_flags(client_with, version, status):
+    if not FLAGS_FILE.exists():
+        pytest.skip(f"{FLAGS_FILE} not found")
+    provider = FlagdProvider(resolver_type=ResolverType.FILE, offline_flag_source_path=str(FLAGS_FILE))
+    api.set_provider_and_wait(provider)
+    api.set_evaluation_context(EvaluationContext(attributes={"version": version}))
+
+    assert client_with(FakeDapr(CART)).post("/pay/c1", json=CHECKOUT).status_code == status
