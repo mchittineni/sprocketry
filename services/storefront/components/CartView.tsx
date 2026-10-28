@@ -25,8 +25,6 @@ export function CartView({
   const [quote, setQuote] = useState<Quote | null>(null);
   const [quoting, startQuote] = useTransition();
   const count = cart.items.reduce((n, i) => n + i.quantity, 0);
-  // Quantity changes re-add the item at the end, so sort to keep lines from jumping around.
-  const items = [...cart.items].sort((a, b) => a.name.localeCompare(b.name));
 
   function onCity(id: string) {
     setCity(id);
@@ -42,7 +40,7 @@ export function CartView({
           Your cart <span className="muted">({count} {count === 1 ? 'item' : 'items'})</span>
         </h1>
         <ul className="lines">
-          {items.map((item) => (
+          {cart.items.map((item) => (
             <CartLine key={item.sku} item={item} category={categories[item.sku] ?? 'home'} />
           ))}
         </ul>

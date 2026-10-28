@@ -3,18 +3,13 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { call, cartId, type Cart, type Order, type Quote } from '@/lib/api';
+import { reason } from '@/lib/messages';
 
 export type Result = { ok: true; message: string } | { ok: false; message: string };
 
 // The layout shows the cart count, so every cart change revalidates from the root.
 function refresh() {
   revalidatePath('/', 'layout');
-}
-
-function reason(err: unknown): string {
-  const text = err instanceof Error ? err.message : String(err);
-  if (text.includes('out of stock')) return 'Sorry, that robot just sold out.';
-  return 'Something went wrong. Please try again.';
 }
 
 export async function addToCart(sku: string, name: string): Promise<Result> {
@@ -30,14 +25,12 @@ export async function addToCart(sku: string, name: string): Promise<Result> {
   }
 }
 
-// The cart API only adds or removes, so a lower quantity is a remove followed by an add.
 export async function setQuantity(sku: string, quantity: number): Promise<Result> {
-  const id = await cartId();
   try {
-    await call<Cart>('cart', `cart/${id}/items/${encodeURIComponent(sku)}`, { method: 'DELETE' });
-    if (quantity > 0) {
-      await call<Cart>('cart', `cart/${id}/items`, { method: 'POST', body: JSON.stringify({ sku, quantity }) });
-    }
+    await call<Cart>('cart', `cart/${await cartId()}/items/${encodeURIComponent(sku)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ quantity }),
+    });
     refresh();
     return { ok: true, message: quantity > 0 ? 'Cart updated' : 'Item removed' };
   } catch (err) {
@@ -68,8 +61,12 @@ export async function checkout(_prev: CheckoutState, formData: FormData): Promis
       body: JSON.stringify({ user_id: id, city_id: cityId }),
     });
   } catch (err) {
-    // Payment has fault injection, so declines are expected; nothing was charged.
     console.error('checkout failed', err);
+    if (String(err).includes('out of stock')) {
+      refresh();
+      return { error: 'Part of your order just sold out, so you have not been charged. Please update your cart.' };
+    }
+    // Payment has fault injection, so declines are expected; nothing was charged.
     return { error: 'Your payment was declined and you have not been charged. Please try again.' };
   }
   refresh();
