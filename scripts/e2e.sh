@@ -103,6 +103,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Keycloak and the storefront start slower than the services checked above; on a fresh stack they may
+# still be coming up.
+for _ in $(seq 1 90); do
+  curl -sf -o /dev/null "$KC/realms/sprocketry/.well-known/openid-configuration" && curl -sf -o /dev/null "$SF/" && break
+  sleep 2
+done
+
 host_check "create test shopper" 201 "$(kc -X POST "$KC/admin/realms/sprocketry/users" -d '{"username":"'"$user"'","email":"'"$user"'@example.test","firstName":"E2E","lastName":"Shopper","enabled":true,"emailVerified":true,"credentials":[{"type":"password","value":"'"$pass"'","temporary":false}]}')"
 host_check "create test client" 201 "$(kc -X POST "$KC/admin/realms/sprocketry/clients" -d '{"clientId":"'"$client"'","secret":"'"$client"'-secret","publicClient":false,"standardFlowEnabled":false,"directAccessGrantsEnabled":true,"protocolMappers":[{"name":"audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","config":{"included.custom.audience":"sprocketry-api","access.token.claim":"true"}}]}')"
 token=$(curl -s -d client_id="$client" -d client_secret="$client-secret" -d username="$user" -d password="$pass" \
@@ -116,6 +123,11 @@ failed=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want $2, got $3"; failed=1; fi; }
 status() { curl -s -o /tmp/body -w '%{http_code}' "$@"; }
 post() { status -X POST -H 'content-type: application/json' "$@"; }
+
+i=0
+until curl -sf -o /dev/null "$D/reviews/method/products/RB-001/reviews" && [ "$(status "$D/profile/method/me")" = 401 ]; do
+  i=$((i + 1)); [ $i -lt 90 ] || { echo "FAIL reviews and profile did not become ready"; exit 1; }; sleep 2
+done
 
 review='{"rating":4,"body":"Lifts more than the brochure says."}'
 check "review without a token is refused" 401 "$(post -d "$review" "$D/reviews/method/products/RB-001/reviews")"
