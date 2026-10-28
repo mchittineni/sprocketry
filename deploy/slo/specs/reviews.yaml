@@ -1,0 +1,42 @@
+# reviews SLOs, in Sloth's prometheus/v1 format (https://sloth.dev). `make slo` generates the
+# Prometheus rules in deploy/helm/sprocketry/files/prometheus/rules/reviews.yaml from this file.
+# How the SLIs, targets and alerts work: README, "SLOs and alerts".
+# Every total_query ends in "> 0": a window without traffic then records nothing rather than 0/0 = NaN,
+# which would otherwise turn the 30-day SLI and error budget into NaN for a month.
+version: prometheus/v1
+service: reviews
+labels:
+  owner: sprocketry
+slos:
+  - name: requests-availability
+    objective: 99.5
+    description: Reading and posting reviews succeeds. A 401, 404 or 409 is the client's error, not the service's.
+    sli:
+      events:
+        error_query: (sum(rate(dapr_http_client_completed_count_total{app_id="reviews",status=~"5.."}[{{.window}}])) or vector(0))
+        total_query: sum(rate(dapr_http_client_completed_count_total{app_id="reviews"}[{{.window}}])) > 0
+    alerting:
+      name: AvailabilityBudgetBurn
+      annotations:
+        summary: reviews is spending its availability error budget too fast
+      page_alert:
+        labels: { severity: page }
+      ticket_alert:
+        labels: { severity: ticket }
+  - name: requests-latency
+    objective: 99
+    description: Review requests complete within 250ms.
+    sli:
+      events:
+        error_query: >-
+          sum(rate(dapr_http_client_roundtrip_latency_count{app_id="reviews"}[{{.window}}]))
+          - sum(rate(dapr_http_client_roundtrip_latency_bucket{app_id="reviews",le="250"}[{{.window}}]))
+        total_query: sum(rate(dapr_http_client_roundtrip_latency_count{app_id="reviews"}[{{.window}}])) > 0
+    alerting:
+      name: LatencyBudgetBurn
+      annotations:
+        summary: reviews is spending its latency error budget too fast
+      page_alert:
+        labels: { severity: page }
+      ticket_alert:
+        labels: { severity: ticket }
