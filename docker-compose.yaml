@@ -24,6 +24,13 @@ x-daprd: &daprd
 x-app-env: &app-env
   DAPR_HTTP_PORT: "3500"
 
+# Services that check Keycloak access tokens. Tokens name the issuer by its public address (the browser's
+# view), while the services fetch signing keys from Keycloak directly.
+x-oidc-env: &oidc-env
+  OIDC_ISSUER: http://localhost:${KEYCLOAK_PORT:-8081}/realms/sprocketry
+  OIDC_JWKS_URL: http://keycloak:8080/realms/sprocketry/protocol/openid-connect/certs
+  OIDC_AUDIENCE: sprocketry-api
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -46,7 +53,12 @@ services:
     logging: *logging
     image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/storefront:${TAG:-latest}
     ports: ["${STOREFRONT_PORT:-3000}:3000"]
-    environment: *app-env
+    environment:
+      <<: *app-env
+      STOREFRONT_URL: http://localhost:${STOREFRONT_PORT:-3000}
+      OIDC_DISCOVERY_URL: http://keycloak:8080/realms/sprocketry
+      OIDC_CLIENT_ID: storefront
+      OIDC_CLIENT_SECRET: local-dev-storefront-secret
   storefront-dapr:
     <<: *daprd
     depends_on:
@@ -132,6 +144,67 @@ services:
       fulfillment: { condition: service_started, restart: true }
     command: ["./daprd", "--app-id", "fulfillment", "--app-port", "8080", "--resources-path", "/components", "--config", "/config/config.yaml"]
     network_mode: "service:fulfillment"
+
+  reviews:
+    build: ./services/reviews
+    logging: *logging
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/reviews:${TAG:-latest}
+    environment:
+      <<: [*app-env, *oidc-env]
+      DATABASE_URL: postgres://sprocketry:sprocketry@postgres:5432/reviews
+    depends_on:
+      postgres: { condition: service_healthy }
+  reviews-dapr:
+    <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      reviews: { condition: service_started, restart: true }
+    command: ["./daprd", "--app-id", "reviews", "--app-port", "8080", "--resources-path", "/components", "--config", "/config/config.yaml"]
+    network_mode: "service:reviews"
+
+  profile:
+    build: ./services/profile
+    logging: *logging
+    image: ${REGISTRY:-ghcr.io/mchittineni/sprocketry}/profile:${TAG:-latest}
+    environment:
+      <<: [*app-env, *oidc-env]
+      DATABASE_URL: postgres://sprocketry:sprocketry@postgres:5432/profile
+    depends_on:
+      postgres: { condition: service_healthy }
+  profile-dapr:
+    <<: *daprd
+    depends_on:
+      valkey: { condition: service_started }
+      profile: { condition: service_started, restart: true }
+    command: ["./daprd", "--app-id", "profile", "--app-port", "8080", "--resources-path", "/components", "--config", "/config/config.yaml"]
+    network_mode: "service:profile"
+
+  # ---------- Identity ----------
+  # Keycloak issues shoppers' sign-ins. Admin console: http://localhost:8081/admin (admin/admin).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    command: ["start", "--import-realm"]
+    logging: *logging
+    ports: ["${KEYCLOAK_PORT:-8081}:8080"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: sprocketry
+      KC_DB_PASSWORD: sprocketry
+      KC_HTTP_ENABLED: "true"
+      # The browser reaches Keycloak on the host port; containers reach it as keycloak:8080.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8081}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Read by the realm import (deploy/helm/sprocketry/files/keycloak), shared with the chart.
+      STOREFRONT_URL: http://localhost:${STOREFRONT_PORT:-3000}
+      STOREFRONT_CLIENT_SECRET: local-dev-storefront-secret
+    volumes:
+      - ./deploy/helm/sprocketry/files/keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres: { condition: service_healthy }
 
   # ---------- Observability ----------
   # Collects traces, metrics and logs and forwards them to the LGTM container.
