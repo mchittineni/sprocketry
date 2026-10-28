@@ -12,6 +12,9 @@ from typing import Annotated, Any
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
+from openfeature import api
+from openfeature.contrib.provider.flagd import FlagdProvider
+from openfeature.evaluation_context import EvaluationContext
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format='{"level":"%(levelname)s","msg":"%(message)s"}')
@@ -21,9 +24,13 @@ DAPR_URL = f"http://localhost:{os.getenv('DAPR_HTTP_PORT', '3500')}"
 PUBSUB = os.getenv("PUBSUB_NAME", "pubsub")
 ORDERS_TOPIC = os.getenv("ORDERS_TOPIC", "orders")
 
-# Fault injection knobs, the equivalent of robot-shop's built-in failure modes.
-FAILURE_RATE = float(os.getenv("PAYMENT_FAILURE_RATE", "0"))
-DELAY_MS = int(os.getenv("PAYMENT_DELAY_MS", "0"))
+# Fault injection, the equivalent of robot-shop's built-in failure modes, as feature flags read on every
+# checkout: flagd serves them (deploy/helm/sprocketry/files/flagd/faults.json), so they change at runtime.
+# Flags are evaluated in-process from a copy flagd streams, so a checkout makes no extra network call.
+# Without flagd, or until it first answers, every flag reads its default: no faults.
+flags = api.get_client("payment")
+# Flag rules can target a version, e.g. to make a canary release fail on purpose.
+api.set_evaluation_context(EvaluationContext(attributes={"version": os.getenv("APP_VERSION", "dev")}))
 
 # Order IDs are derived from the cart and its version, so paying twice for the same cart contents
 # (a double submit, or a retry after a timeout) places one order.
@@ -47,10 +54,14 @@ class Dapr:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # FLAGD_HOST and FLAGD_RESOLVER configure the provider; without them no flags are read.
+    if os.getenv("FLAGD_HOST"):
+        api.set_provider(FlagdProvider())
     # One client for the process, so calls to the sidecar reuse pooled connections.
     async with httpx.AsyncClient(timeout=10) as client:
         app.state.dapr = Dapr(client)
         yield
+    api.shutdown()
 
 
 def get_dapr(request: Request) -> Dapr:
@@ -88,6 +99,14 @@ async def healthz():
 
 @app.post("/pay/{cart_id}", response_model=Order)
 async def pay(cart_id: str, checkout: Checkout, dapr: Annotated[Dapr, Depends(get_dapr)]) -> Order:
+    # Injected faults come first, as a payment gateway outage would fail every checkout attempt.
+    delay_ms = flags.get_integer_value("payment-delay-ms", 0)
+    if delay_ms:
+        await asyncio.sleep(delay_ms / 1000)
+    if random.random() < flags.get_float_value("payment-failure-rate", 0.0):
+        log.warning("payment gateway declined cart %s (injected fault)", cart_id)
+        raise HTTPException(status_code=502, detail="payment gateway error")
+
     cart_resp = await dapr.invoke("cart", "GET", f"cart/{cart_id}")
     cart_resp.raise_for_status()
     cart = cart_resp.json()
@@ -99,12 +118,6 @@ async def pay(cart_id: str, checkout: Checkout, dapr: Annotated[Dapr, Depends(ge
         raise HTTPException(status_code=400, detail="unknown city")
     quote_resp.raise_for_status()
     shipping = money(quote_resp.json()["cost"])
-
-    if DELAY_MS:
-        await asyncio.sleep(DELAY_MS / 1000)
-    if random.random() < FAILURE_RATE:
-        log.warning("payment gateway declined cart %s (injected fault)", cart_id)
-        raise HTTPException(status_code=502, detail="payment gateway error")
 
     order_id = str(uuid.uuid5(ORDER_NAMESPACE, f"{cart_id}:{cart.get('version', 0)}"))
     subtotal = money(cart["total"])
