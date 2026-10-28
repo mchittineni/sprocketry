@@ -1,8 +1,11 @@
-.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e grafana test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
+.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e grafana slo slo-test test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
 .DEFAULT_GOAL := help
 
 TF_DIR := infra/azure/envs/dev
 K6_IMAGE := grafana/k6:2.3.0
+SLOTH_IMAGE := ghcr.io/slok/sloth:v0.16.0
+PROMTOOL_IMAGE := prom/prometheus:v3.15.0
+SLO_RULES := deploy/helm/sprocketry/files/prometheus/rules
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -73,6 +76,18 @@ test-docker: ## Lint and test every service, using only Docker
 	$(call in_container,shipping,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
 	$(call in_container,storefront,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
 	$(call in_container,payment,python:3.14-slim,python -m venv /tmp/venv && /tmp/venv/bin/pip install -q ".[dev]" && /tmp/venv/bin/ruff check . && /tmp/venv/bin/ruff format --check . && /tmp/venv/bin/pytest -q -p no:cacheprovider)
+
+# ---------- SLOs ----------
+slo: ## Generate the Prometheus SLO rules from deploy/slo/specs (then restart lgtm to load them)
+	rm -f $(SLO_RULES)/*.yaml
+	docker run --rm -u $$(id -u):$$(id -g) -v $(CURDIR):/repo -w /repo $(SLOTH_IMAGE) \
+	  generate --no-log -i deploy/slo/specs -o $(SLO_RULES)
+
+slo-test: slo ## Regenerate the SLO rules, validate them and run the burn-rate alert tests
+	docker run --rm -v $(CURDIR)/deploy:/deploy:ro -w /deploy/slo --entrypoint sh $(PROMTOOL_IMAGE) -c '\
+	  promtool check config --syntax-only /deploy/helm/sprocketry/files/prometheus/prometheus.yaml && \
+	  promtool check rules /deploy/helm/sprocketry/files/prometheus/rules/*.yaml && \
+	  promtool test rules tests/*.yaml'
 
 # ---------- Local Kubernetes (kind) ----------
 kind-up: ## Run the app on a local kind cluster (storefront on http://localhost:8080)
