@@ -1,4 +1,4 @@
-.PHONY: help doctor up up-prebuilt rebuild down logs smoke test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
+.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e test test-docker kind-up kind-down azure-destroy tf-validate helm-lint
 .DEFAULT_GOAL := help
 
 TF_DIR := infra/azure/envs/dev
@@ -21,6 +21,8 @@ rebuild: ## Rebuild one service and its Dapr sidecar, e.g. make rebuild SVC=stor
 	@test -n "$(SVC)" || { echo "usage: make rebuild SVC=<service>"; exit 2; }
 	docker compose up --build -d $(SVC)
 	docker compose up -d --force-recreate $(SVC)-dapr
+	@# The other sidecars cache the old sidecar's address and would keep calling it; restart them to re-resolve.
+	docker compose restart $$(docker compose config --services | grep -- '-dapr$$' | grep -vx '$(SVC)-dapr')
 
 down: ## Stop the local stack and delete its data
 	docker compose down -v
@@ -34,24 +36,43 @@ smoke: ## Load test the storefront (BASE_URL=... for another target); uses k6, o
 	  -e BASE_URL="$$(echo "$${BASE_URL:-http://localhost:3000}" | sed 's#//localhost#//host.docker.internal#')" \
 	  -e VUS -e DURATION $(K6_IMAGE) run - < loadgen/smoke.js; fi
 
-test: ## Unit tests for every service (needs Go, .NET, Node and Python; see test-docker)
-	cd services/catalog && go vet ./... && go test ./...
-	cd services/fulfillment && go vet ./... && go test ./...
-	cd services/cart && dotnet build -c Release -warnaserror
-	cd services/shipping && npm ci && npm run build && npm test
-	cd services/storefront && npm ci && npm run build
-	cd services/payment && pip install -q ".[dev]" && pytest -q
+GOLANGCI_LINT_IMAGE := golangci/golangci-lint:v2.15.0
+TEST_PG := sprocketry-test-pg
+TEST_NET := sprocketry-test
+
+e2e: ## End-to-end checks through the real Dapr sidecars against the running local stack
+	./scripts/e2e.sh
+
+test: ## Lint and test every service (needs Go, golangci-lint, .NET, Node and Python; see test-docker)
+	cd services/catalog && test -z "$$(gofmt -l .)" && golangci-lint run ./... && go test -race ./...
+	cd services/fulfillment && test -z "$$(gofmt -l .)" && golangci-lint run ./... && go test -race ./...
+	cd services/cart && dotnet build -c Release -warnaserror && dotnet format Cart.csproj --verify-no-changes
+	cd services/cart/tests && dotnet test -c Release
+	cd services/shipping && npm ci && npm run lint && npm run build && npm test
+	cd services/storefront && npm ci && npm run lint && npm run build && npm test
+	cd services/payment && pip install -q ".[dev]" && ruff check . && ruff format --check . && pytest -q
+	@echo "Catalog's database tests skip unless TEST_DATABASE_URL is set; test-docker provides one."
 
 # Runs a command in a toolchain container with services/<name> mounted, as the current user.
-in_container = docker run --rm -u $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/services/$(1):/src -w /src $(2) sh -c '$(3)'
+# The optional fourth argument adds docker run flags.
+in_container = docker run --rm $(4) -u $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/services/$(1):/src -w /src $(2) sh -c '$(3)'
 
-test-docker: ## Unit tests for every service, using only Docker
-	$(call in_container,catalog,golang:1.27,go vet ./... && go test ./...)
-	$(call in_container,fulfillment,golang:1.27,go vet ./... && go test ./...)
-	$(call in_container,cart,mcr.microsoft.com/dotnet/sdk:10.0,dotnet build -c Release -warnaserror)
-	$(call in_container,shipping,node:24-alpine,npm ci && npm run build && npm test)
-	$(call in_container,storefront,node:24-alpine,npm ci && npm run build)
-	$(call in_container,payment,python:3.14-slim,python -m venv /tmp/venv && /tmp/venv/bin/pip install -q ".[dev]" && /tmp/venv/bin/pytest -q -p no:cacheprovider)
+go_checks := test -z "$$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+test-docker: ## Lint and test every service, using only Docker
+	@docker network create $(TEST_NET) >/dev/null 2>&1 || true
+	@docker rm -f $(TEST_PG) >/dev/null 2>&1 || true
+	docker run -d --name $(TEST_PG) --network $(TEST_NET) -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=catalog postgres:18-alpine >/dev/null
+	@until docker exec $(TEST_PG) pg_isready -h 127.0.0.1 -U test >/dev/null 2>&1; do sleep 1; done
+	$(call in_container,catalog,golang:1.27,$(go_checks),--network $(TEST_NET) -e TEST_DATABASE_URL=postgres://test:test@$(TEST_PG):5432/catalog) \
+	  ; status=$$?; docker rm -f $(TEST_PG) >/dev/null; exit $$status
+	$(call in_container,catalog,$(GOLANGCI_LINT_IMAGE),golangci-lint run ./...)
+	$(call in_container,fulfillment,golang:1.27,$(go_checks))
+	$(call in_container,fulfillment,$(GOLANGCI_LINT_IMAGE),golangci-lint run ./...)
+	$(call in_container,cart,mcr.microsoft.com/dotnet/sdk:10.0,dotnet build -c Release -warnaserror && dotnet format Cart.csproj --verify-no-changes && cd tests && dotnet test -c Release)
+	$(call in_container,shipping,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
+	$(call in_container,storefront,node:24-alpine,npm ci && npm run lint && npm run build && npm test)
+	$(call in_container,payment,python:3.14-slim,python -m venv /tmp/venv && /tmp/venv/bin/pip install -q ".[dev]" && /tmp/venv/bin/ruff check . && /tmp/venv/bin/ruff format --check . && /tmp/venv/bin/pytest -q -p no:cacheprovider)
 
 # ---------- Local Kubernetes (kind) ----------
 kind-up: ## Run the app on a local kind cluster (storefront on http://localhost:8080)
