@@ -7,7 +7,9 @@ on:
       - .github/workflows/services.yml
       - docker-compose.yaml
       - deploy/dapr/local/**
+      - deploy/helm/sprocketry/files/flagd/**
       - scripts/e2e.sh
+      - scripts/fault.sh
   # push:
   #   branches:
   #     - main
@@ -16,10 +18,10 @@ on:
   #     - .github/workflows/services.yml
   #     - docker-compose.yaml
   #     - deploy/dapr/local/**
+  #     - deploy/helm/sprocketry/files/flagd/**
   #     - scripts/e2e.sh
+  #     - scripts/fault.sh
 
-# On a PR, a new push supersedes the running check. On main every commit gets its own group: GitHub cancels
-# a queued run when another queues behind it, which would skip building and promoting that commit's services.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -48,7 +50,8 @@ jobs:
             catalog: services/catalog/**
             cart: services/cart/**
             shipping: services/shipping/**
-            payment: services/payment/**
+            # Payment's tests evaluate the shipped fault flags.
+            payment: [services/payment/**, deploy/helm/sprocketry/files/flagd/**]
             fulfillment: services/fulfillment/**
             reviews: services/reviews/**
             profile: services/profile/**
@@ -98,8 +101,6 @@ jobs:
         if: contains(fromJSON('["catalog","fulfillment"]'), matrix.service)
         run: test -z "$(gofmt -l .)" && golangci-lint run ./...
 
-      # Catalog's tests run against a real, disposable PostgreSQL.
-      # Services with database tests run them against a real, disposable PostgreSQL.
       - name: Start PostgreSQL
         if: contains(fromJSON('["catalog","reviews","profile"]'), matrix.service)
         env:
@@ -129,7 +130,6 @@ jobs:
         working-directory: services/cart/tests
         run: dotnet test -c Release
 
-      # rust-toolchain.toml pins the compiler; rustup on the runner installs it.
       - name: Lint and Test Rust Code
         if: matrix.service == 'reviews'
         run: cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
@@ -142,7 +142,6 @@ jobs:
           java-version: "25"
           cache: maven
 
-      # Compiler warnings fail the build (pom.xml), and the tests include real signed tokens.
       - name: Build and Test Java Code
         if: matrix.service == 'profile'
         run: mvn -B verify
@@ -261,16 +260,12 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  # The whole stack with real Dapr sidecars, Valkey and Postgres. Unit tests fake the sidecar; this is
-  # what proves the services agree with each other and with Dapr's actual behaviour.
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-    env:
-      PAYMENT_FAILURE_RATE: "0"
-      PAYMENT_DELAY_MS: "0"
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -287,9 +282,6 @@ jobs:
         if: failure()
         run: docker compose ps -a && docker compose logs --tail=100
 
-  # Closes the GitOps loop: once every changed image is pushed, pin those services to this commit's
-  # SHA in Git. Argo CD deploys from Git, so this commit is what rolls the new images out.
-  # Runs only if every build and the end-to-end checks succeeded, so a release never mixes new and failed services.
   promote:
     needs: [changes, build, e2e]
     if: github.event_name == 'push'
@@ -306,9 +298,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Runs for different commits can finish in any order, so a service is only moved forward: its pinned
-      # tag must be an ancestor of this commit. Each attempt starts from a fresh main, so a push that lands
-      # in between is never fought with a half-finished rebase.
       - name: Pin Image Tags and Push
         run: |
           git config user.name "github-actions[bot]"
