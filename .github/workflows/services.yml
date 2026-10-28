@@ -50,6 +50,8 @@ jobs:
             shipping: services/shipping/**
             payment: services/payment/**
             fulfillment: services/fulfillment/**
+            reviews: services/reviews/**
+            profile: services/profile/**
 
   build:
     needs: changes
@@ -97,11 +99,14 @@ jobs:
         run: test -z "$(gofmt -l .)" && golangci-lint run ./...
 
       # Catalog's tests run against a real, disposable PostgreSQL.
+      # Services with database tests run them against a real, disposable PostgreSQL.
       - name: Start PostgreSQL
-        if: matrix.service == 'catalog'
+        if: contains(fromJSON('["catalog","reviews","profile"]'), matrix.service)
+        env:
+          SERVICE: ${{ matrix.service }}
         run: |
-          echo "TEST_DATABASE_URL=postgres://test:test@localhost:5432/catalog" >> "$GITHUB_ENV"
-          docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=catalog postgres:18-alpine
+          echo "TEST_DATABASE_URL=postgres://test:test@localhost:5432/$SERVICE" >> "$GITHUB_ENV"
+          docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e "POSTGRES_DB=$SERVICE" postgres:18-alpine
           for _ in $(seq 1 30); do docker exec postgres pg_isready -h 127.0.0.1 -U test && exit 0; sleep 1; done
           exit 1
 
@@ -123,6 +128,24 @@ jobs:
         if: matrix.service == 'cart'
         working-directory: services/cart/tests
         run: dotnet test -c Release
+
+      # rust-toolchain.toml pins the compiler; rustup on the runner installs it.
+      - name: Lint and Test Rust Code
+        if: matrix.service == 'reviews'
+        run: cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+
+      - name: Setup Java
+        if: matrix.service == 'profile'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      # Compiler warnings fail the build (pom.xml), and the tests include real signed tokens.
+      - name: Build and Test Java Code
+        if: matrix.service == 'profile'
+        run: mvn -B verify
 
       - name: Setup Node.js
         if: contains(fromJSON('["storefront","shipping"]'), matrix.service)
