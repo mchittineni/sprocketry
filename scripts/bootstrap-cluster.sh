@@ -9,6 +9,7 @@ VALUES=${VALUES:-deploy/helm/sprocketry/values-azure.yaml}
 ESO_VERSION=${ESO_VERSION:-2.12.0}
 ENVOY_GATEWAY_VERSION=${ENVOY_GATEWAY_VERSION:-v1.9.2}
 ARGOCD_CHART_VERSION=${ARGOCD_CHART_VERSION:-10.10.3}
+ARGO_ROLLOUTS_CHART_VERSION=${ARGO_ROLLOUTS_CHART_VERSION:-2.43.7}
 tf() { terraform -chdir="$TF_DIR" output -raw "$1"; }
 
 RG=$(tf resource_group)
@@ -41,6 +42,12 @@ observability:
     enabled: true
   lgtm:
     enabled: true
+
+# Canary releases (Argo Rollouts), judged on the in-cluster Prometheus, and runtime fault flags (flagd).
+rollouts:
+  enabled: true
+flags:
+  enabled: true
 EOF
   echo "Wrote $VALUES"
 fi
@@ -69,8 +76,12 @@ helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
   --version "$ENVOY_GATEWAY_VERSION" -n envoy-gateway-system --create-namespace --wait
 kubectl apply -f deploy/gateway/gateway.yaml
 
-# Argo CD, then the app-of-apps that syncs everything else from Git.
+# Argo Rollouts runs the services' canary releases (rollouts.enabled).
 helm repo add argo https://argoproj.github.io/argo-helm --force-update
+helm upgrade --install argo-rollouts argo/argo-rollouts \
+  --version "$ARGO_ROLLOUTS_CHART_VERSION" -n argo-rollouts --create-namespace --wait
+
+# Argo CD, then the app-of-apps that syncs everything else from Git.
 helm upgrade --install argocd argo/argo-cd \
   --version "$ARGOCD_CHART_VERSION" -n argocd --create-namespace --wait
 sed "s#repoURL: .*#repoURL: $REPO_URL#" deploy/argocd/sprocketry.yaml | kubectl apply -f -
