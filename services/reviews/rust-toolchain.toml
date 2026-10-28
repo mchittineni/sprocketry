@@ -1,0 +1,5 @@
+# The compiler for local builds, CI and the Docker image (rust:1.99 ships 1.99.1).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
