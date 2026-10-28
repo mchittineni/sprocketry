@@ -1,5 +1,6 @@
-# Single-node kind cluster. The storefront NodePort (values.yaml local.publicNodePort)
-# is published on the host as http://localhost:8080.
+# Single-node kind cluster. The storefront NodePort (values.yaml local.publicNodePort) is published on
+# the host as http://localhost:8080, and Keycloak's (values-local.yaml auth.keycloak.nodePort) as
+# http://localhost:8081.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -7,4 +8,7 @@ nodes:
     extraPortMappings:
       - containerPort: 30080
         hostPort: 8080
+        protocol: TCP
+      - containerPort: 30081
+        hostPort: 8081
         protocol: TCP
