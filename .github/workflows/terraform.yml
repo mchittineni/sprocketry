@@ -30,10 +30,17 @@ env:
   TF_VAR_deployer_principal_ids: ${{ vars.DEPLOYER_PRINCIPAL_IDS || '[]' }}
 
 jobs:
+  # Offline checks for every cloud: no credentials, nothing created.
   validate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [azure, aws, gcp]
+    env:
+      CLOUD_DIR: infra/${{ matrix.cloud }}
 
     steps:
       - name: Checkout Repository
@@ -45,16 +52,16 @@ jobs:
           terraform_version: 1.16.7
 
       - name: Format Terraform Files
-        run: terraform fmt -check -recursive infra
+        run: terraform fmt -check -recursive "$CLOUD_DIR"
 
       - name: Initialize Terraform
-        run: terraform -chdir="$TF_DIR" init -backend=false -input=false
+        run: terraform -chdir="$CLOUD_DIR/envs/dev" init -backend=false -input=false
 
       - name: Validate Terraform Configuration
-        run: terraform -chdir="$TF_DIR" validate
+        run: terraform -chdir="$CLOUD_DIR/envs/dev" validate
 
       - name: Test Terraform Plan
-        run: terraform -chdir="$TF_DIR" test
+        run: terraform -chdir="$CLOUD_DIR/envs/dev" test
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
@@ -63,9 +70,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
-          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
-        working-directory: infra/azure
+          tflint --init --config "$GITHUB_WORKSPACE/$CLOUD_DIR/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/$CLOUD_DIR/.tflint.hcl"
+        working-directory: ${{ env.CLOUD_DIR }}
 
       - name: Install Trivy
         env:
@@ -78,8 +85,9 @@ jobs:
           sudo tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy
 
       - name: Scan Terraform Misconfigurations
-        run: trivy config --severity HIGH,CRITICAL --exit-code 0 infra
+        run: trivy config --severity HIGH,CRITICAL --exit-code 0 "$CLOUD_DIR"
 
+  # Azure only: a real plan needs that cloud's credentials, and only Azure's are set up in CI.
   plan:
     needs: validate
     if: >-
