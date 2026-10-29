@@ -10,7 +10,7 @@ SLO_RULES := deploy/helm/sprocketry/files/prometheus/rules
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-doctor: ## Check prerequisites (doctor TARGET=kind|azure|all for the other paths)
+doctor: ## Check prerequisites (doctor TARGET=kind|azure|aws|gcp|all for the other paths)
 	@./scripts/doctor.sh $(or $(TARGET),local)
 
 # ---------- Local stack (Docker only) ----------
@@ -124,11 +124,14 @@ azure-destroy: ## Delete every Azure resource Terraform created (state storage i
 	terraform -chdir=$(TF_DIR) destroy
 	@echo "To also remove Terraform state: az group delete -n rg-terraform-state"
 
-tf-validate: ## Format-check, validate and plan-test Terraform offline (no Azure login needed)
+tf-validate: ## Format-check, validate and plan-test every cloud's Terraform offline (no cloud login needed)
 	terraform fmt -check -recursive infra
-	terraform -chdir=$(TF_DIR) init -backend=false -input=false
-	terraform -chdir=$(TF_DIR) validate
-	terraform -chdir=$(TF_DIR) test
+	@for cloud in azure aws gcp; do \
+	  echo "==> $$cloud"; \
+	  terraform -chdir=infra/$$cloud/envs/dev init -backend=false -input=false >/dev/null && \
+	  terraform -chdir=infra/$$cloud/envs/dev validate && \
+	  terraform -chdir=infra/$$cloud/envs/dev test || exit 1; \
+	done
 
 helm-lint: ## Lint the chart with the Azure and local values
 	helm lint deploy/helm/sprocketry -f deploy/helm/sprocketry/values-azure.example.yaml
