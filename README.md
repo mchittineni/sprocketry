@@ -58,20 +58,20 @@ For practising observability and incident response, payment has fault flags (`pa
 
 ## Platform
 
-| Concern | Local | Azure |
-|---|---|---|
-| Runtime | Docker Compose + Dapr sidecars | AKS (Azure CNI overlay + Cilium) + Dapr extension |
-| Pub/sub | Valkey | Azure Service Bus (Entra ID auth, no keys) |
-| State | Valkey | Azure Managed Redis |
-| Database | Postgres 18 container | PostgreSQL Flexible Server 18 (VNet-integrated) |
-| Secrets | plain env | **Azure Key Vault** → External Secrets Operator → Kubernetes Secret |
-| Identity | n/a | AKS workload identity (federated, no stored credentials) |
+| Concern | Local | Azure | AWS | Google Cloud |
+|---|---|---|---|---|
+| Runtime | Docker Compose + Dapr sidecars | AKS (Azure CNI overlay + Cilium) + Dapr extension | EKS + Dapr (Helm) | GKE Standard (Dataplane V2) + Dapr (Helm) |
+| Pub/sub | Valkey | Azure Service Bus (Entra ID auth, no keys) | SNS + SQS | Pub/Sub |
+| State | Valkey | Azure Managed Redis | ElastiCache for Valkey (TLS + auth token) | Memorystore for Redis (TLS + AUTH) |
+| Database | Postgres 18 container | PostgreSQL Flexible Server 18 (VNet-integrated) | RDS for PostgreSQL 18 (private) | Cloud SQL for PostgreSQL 18 (private IP) |
+| Secrets | plain env | **Azure Key Vault** → External Secrets Operator → Kubernetes Secret | Secrets Manager → External Secrets | Secret Manager → External Secrets |
+| Identity | n/a | AKS workload identity (federated, no stored credentials) | EKS Pod Identity | Workload Identity Federation for GKE |
 | Ingress | port 3000 | Envoy Gateway (Gateway API) |
-| Delivery | `make up` | GitHub Actions (OIDC) → ACR → tag commit → Argo CD → Argo Rollouts canary |
-| Fault flags | flagd container | flagd in the cluster (OpenFeature) |
-| Identity | Keycloak container (localhost:8081) | Keycloak in the cluster, at `/auth` behind the gateway |
-| Observability | OpenTelemetry Collector → Grafana LGTM container | Collector agent per node → in-cluster LGTM, or any OTLP backend |
-| IaC | n/a | **Terraform** (`infra/azure`) |
+| Delivery | `make up` | GitHub Actions (OIDC) → ACR → tag commit → Argo CD → Argo Rollouts canary | same, with ECR | same, with Artifact Registry |
+| Fault flags | flagd container | flagd in the cluster (OpenFeature) | same | same |
+| Sign-in | Keycloak container (localhost:8081) | Keycloak in the cluster, at `/auth` behind the gateway | same | same |
+| Observability | OpenTelemetry Collector → Grafana LGTM container | Collector agent per node → in-cluster LGTM, or any OTLP backend | same | same |
+| IaC | n/a | **Terraform** (`infra/azure`) | **Terraform** (`infra/aws`) | **Terraform** (`infra/gcp`) |
 
 ## Ways to run it
 
@@ -286,6 +286,15 @@ Then set these repository variables:
 
 When these variables aren't set, the Azure steps are skipped instead of failing.
 
+To push images to ECR or Artifact Registry too, set that cloud's variables. As with Azure, create the CI identity yourself: an IAM role GitHub's OIDC provider can assume, with ECR push rights, or a Workload Identity Federation provider and a service account with `roles/artifactregistry.writer`.
+
+| Variable | Value |
+|---|---|
+| `ECR_REGISTRY`, `AWS_REGION`, `AWS_ROLE_ARN` | `terraform output ecr_registry`, its region, and the CI role |
+| `GAR_REPOSITORY`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | `terraform output artifact_registry`, the provider's full name, and the CI service account |
+
+Terraform for every cloud is checked offline on each pull request (format, validate, plan tests with mocked providers, TFLint, Trivy), with no credentials. Only Azure also gets a real `terraform plan`.
+
 Other checks that run without any setup:
 
 - **Services** ([services.yml](.github/workflows/services.yml)): each changed service is linted (golangci-lint, `dotnet format` with analyzers, ESLint, ruff) and tested, catalog against a real PostgreSQL. Then the whole stack runs under Docker Compose for `make e2e`.
@@ -319,6 +328,41 @@ az group delete -n rg-terraform-state             # optional: the state storage 
 3. Pods read `DATABASE_URL` from that Secret. The Dapr Redis component references it with `secretKeyRef`.
 4. Service Bus uses no secret at all: the Dapr sidecar authenticates with the `apps` workload identity.
 
+## Deploy to AWS or Google Cloud
+
+The same chart runs on EKS and GKE with `cloud: aws` or `cloud: gcp`: only the Dapr components, the secret store and the Terraform change. The steps follow [Deploy to Azure](#deploy-to-azure), with `CLOUD` set:
+
+```bash
+make doctor TARGET=aws                            # or gcp
+CLOUD=aws ./scripts/bootstrap-tfstate.sh          # once: S3 (or GCS) bucket + infra/aws/envs/dev/backend.hcl
+
+cd infra/aws/envs/dev
+cp terraform.tfvars.example terraform.tfvars      # fill in, see the comments in the file
+terraform init -backend-config=backend.hcl
+terraform apply
+cd -
+
+CLOUD=aws ./scripts/bootstrap-cluster.sh          # writes values-aws.yaml, installs Dapr and the add-ons, starts Argo CD
+git add deploy/helm/sprocketry/values-aws.yaml && git commit -m "chore: aws values" && git push
+```
+
+> **This creates billable resources** on either cloud: a Kubernetes cluster with nodes running around the clock, a managed PostgreSQL, a managed Redis/Valkey, messaging, secrets and a load balancer. Tear down with `terraform destroy` when you're done.
+
+What differs from Azure:
+
+- **AWS:**
+  - The services and External Secrets get their IAM roles from EKS Pod Identity, so no service account needs an annotation.
+  - RDS creates only the `catalog` database. A Job in the chart creates the others (`aws.databases`); the services that need them restart until it has run.
+  - The EKS API endpoint is reachable only from `cluster_endpoint_public_access_cidrs`, and only for the IAM principals in `deployer_principal_arns`.
+  - EKS has no node autoscaler built in: the node group stays at its desired size until you install Cluster Autoscaler or Karpenter.
+- **Google Cloud:**
+  - IAM is granted to the Kubernetes service accounts directly (Workload Identity Federation for GKE), again with no annotations.
+  - Memorystore accepts only TLS, signed by a CA of its own that no system trusts. Dapr's Redis component can't be given a CA, so the chart mounts it into the sidecars of the services that use the state store, through `SSL_CERT_DIR`. If the server's certificate turns out not to match, set `gcp.redisSkipTlsVerify: true`: traffic stays encrypted, but the server isn't verified.
+  - kubectl reaches the control plane through its IAM-checked DNS endpoint (`--dns-endpoint`); its IP endpoint is closed unless you list CIDRs in `master_authorized_cidrs`.
+- **Both:**
+  - Secret names, topics and queues have no environment prefix, so each environment needs its own AWS account and region, or its own GCP project.
+  - Neither has had a real `terraform plan` or `apply` yet, only the offline checks above. Expect a first apply to surface quota, region or version availability issues.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -347,6 +391,8 @@ deploy/argocd/          Argo CD application
 deploy/gateway/         Gateway API entry point
 infra/azure/modules/    network, aks, postgres, redis, servicebus, keyvault, workload-identity
 infra/azure/envs/dev/   dev environment composition
+infra/aws/              network, eks, postgres, valkey, messaging, secrets, pod-identity; envs/dev
+infra/gcp/              network, gke, cloudsql, memorystore, pubsub, secrets, workload-identity; envs/dev
 loadgen/                k6 scenarios
 scripts/                doctor, kind-up, e2e, fault flags, canary demo, chaos and one-time Azure bootstrap scripts
 ```
@@ -360,4 +406,4 @@ scripts/                doctor, kind-up, e2e, fault flags, canary demo, chaos an
 - [x] Chaos Mesh experiments
 - [ ] Kyverno policies, image signing with Cosign, SBOMs
 - [ ] `assistant` service: RAG over the catalog with pgvector
-- [ ] AWS (`infra/aws`) and GCP (`infra/gcp`), which need only new Dapr components and Terraform
+- [x] AWS (`infra/aws`) and GCP (`infra/gcp`), which need only new Dapr components and Terraform
