@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks the tools each way of running Sprocketry needs, and says how to get what is missing.
-# Usage: scripts/doctor.sh [local|kind|azure|all]   (default: local)
+# Usage: scripts/doctor.sh [local|kind|azure|aws|gcp|all]   (default: local)
 set -uo pipefail
 
 TARGET=${1:-local}
@@ -46,11 +46,9 @@ check_kind() {
   port_free 8080 "The kind storefront"
 }
 
-check_azure() {
-  echo "Azure (see README, Deploy to Azure):"
-  need az "https://learn.microsoft.com/cli/azure/install-azure-cli"
+# What every cloud needs: Terraform 1.15+, kubectl, helm, jq, and the state backend config.
+check_cloud_common() { # check_cloud_common <cloud>
   need jq "https://jqlang.org/download/"
-  need kubelogin "az aks install-cli  (signs kubectl in through Entra ID; the cluster has no local accounts)"
   need kubectl "https://kubernetes.io/docs/tasks/tools/"
   need helm "https://helm.sh/docs/intro/install/"
   if command -v terraform >/dev/null 2>&1; then
@@ -59,16 +57,40 @@ check_azure() {
   else
     bad "terraform not found" "https://developer.hashicorp.com/terraform/install"
   fi
+  if [ -f "infra/$1/envs/dev/backend.hcl" ]; then ok "backend.hcl present"; else warn "infra/$1/envs/dev/backend.hcl missing" "Run CLOUD=$1 scripts/bootstrap-tfstate.sh once."; fi
+}
+
+check_azure() {
+  echo "Azure (see README, Deploy to Azure):"
+  need az "https://learn.microsoft.com/cli/azure/install-azure-cli"
+  need kubelogin "az aks install-cli  (signs kubectl in through Entra ID; the cluster has no local accounts)"
+  check_cloud_common azure
   if command -v az >/dev/null 2>&1 && az account show >/dev/null 2>&1; then ok "az logged in"; else warn "not logged in to Azure" "Run 'az login'."; fi
-  if [ -f infra/azure/envs/dev/backend.hcl ]; then ok "backend.hcl present"; else warn "infra/azure/envs/dev/backend.hcl missing" "Run scripts/bootstrap-tfstate.sh once."; fi
+}
+
+check_aws() {
+  echo "AWS (see README, Deploy to AWS or Google Cloud):"
+  need aws "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+  check_cloud_common aws
+  if command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1; then ok "aws signed in"; else warn "not signed in to AWS" "Run 'aws sso login' or set credentials."; fi
+}
+
+check_gcp() {
+  echo "Google Cloud (see README, Deploy to AWS or Google Cloud):"
+  need gcloud "https://cloud.google.com/sdk/docs/install"
+  need gke-gcloud-auth-plugin "gcloud components install gke-gcloud-auth-plugin  (signs kubectl in to GKE)"
+  check_cloud_common gcp
+  if command -v gcloud >/dev/null 2>&1 && gcloud auth application-default print-access-token >/dev/null 2>&1; then ok "gcloud application-default credentials"; else warn "no application-default credentials" "Run 'gcloud auth application-default login' (Terraform uses them)."; fi
 }
 
 case "$TARGET" in
   local) check_local ;;
   kind)  check_kind ;;
   azure) check_azure ;;
-  all)   check_local; check_kind; check_azure ;;
-  *) echo "usage: $0 [local|kind|azure|all]" >&2; exit 2 ;;
+  aws)   check_aws ;;
+  gcp)   check_gcp ;;
+  all)   check_local; check_kind; check_azure; check_aws; check_gcp ;;
+  *) echo "usage: $0 [local|kind|azure|aws|gcp|all]" >&2; exit 2 ;;
 esac
 
 if [ "$failed" -ne 0 ]; then echo "Some requirements are missing."; exit 1; fi
