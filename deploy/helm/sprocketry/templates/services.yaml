@@ -147,22 +147,30 @@ spec:
                   key: storefront-client-secret
             {{- end }}
           # Up to two minutes to start (the JVM services are the slow ones) before liveness takes over.
+          # Probes cross the pod's network, so their timeouts allow for a slow network: with the default
+          # 1s, deploy/chaos/shipping-latency had the kubelet restart a healthy shipping five times,
+          # turning a slow service into one that was down. Liveness is the most patient, so only a
+          # process that has stopped answering is restarted.
           startupProbe:
             httpGet:
               path: {{ $svc.healthPath }}
               port: http
             periodSeconds: 2
+            timeoutSeconds: 3
             failureThreshold: 60
           readinessProbe:
             httpGet:
               path: {{ $svc.readyPath | default $svc.healthPath }}
               port: http
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: {{ $svc.healthPath }}
               port: http
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml ($svc.resources | default $.Values.resources) | nindent 12 }}
           securityContext:
