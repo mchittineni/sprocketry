@@ -1,0 +1,10 @@
+owner  = "you@example.com"
+region = "eu-west-2"
+
+# Who may reach the EKS API from the internet. Yours: curl -s https://checkip.amazonaws.com
+cluster_endpoint_public_access_cidrs = ["203.0.113.10/32"]
+
+# IAM user or role ARNs of everyone who runs Terraform or kubectl here, including the CI role.
+# Yours (the role behind an SSO or assumed-role session):
+#   aws iam get-role --role-name "$(aws sts get-caller-identity --query Arn --output text | cut -d/ -f2)" --query Role.Arn --output text
+deployer_principal_arns = ["arn:aws:iam::123456789012:role/sprocketry-deployer"]
