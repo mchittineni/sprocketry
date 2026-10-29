@@ -65,6 +65,12 @@ spec:
         dapr.io/app-port: {{ $svc.port | quote }}
         dapr.io/config: sprocketry
         dapr.io/log-as-json: "true"
+        {{- $redisCa := and $svc.stateStore (eq $.Values.cloud "gcp") (not $.Values.gcp.redisSkipTlsVerify) }}
+        {{- if $redisCa }}
+        # The sidecar trusts Memorystore's CA (see the redis-ca ConfigMap), as well as the usual roots.
+        dapr.io/volume-mounts: "redis-ca:/etc/redis-ca"
+        dapr.io/env: "SSL_CERT_DIR=/etc/redis-ca:/etc/ssl/certs"
+        {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       # Kubernetes would otherwise set <SERVICE>_PORT=tcp://... for every Service, and FLAGD_PORT is the
@@ -191,6 +197,11 @@ spec:
         {{- range $i, $p := $svc.writablePaths }}
         - name: writable-{{ $i }}
           emptyDir: {}
+        {{- end }}
+        {{- if $redisCa }}
+        - name: redis-ca
+          configMap:
+            name: redis-ca
         {{- end }}
 ---
 apiVersion: v1

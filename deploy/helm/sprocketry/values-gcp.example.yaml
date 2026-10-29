@@ -1,0 +1,40 @@
+# Copy to values-gcp.yaml and fill from `terraform output` in infra/gcp/envs/dev (or let
+# CLOUD=gcp scripts/bootstrap-cluster.sh write it).
+cloud: gcp
+
+image:
+  registry: europe-west2-docker.pkg.dev/my-project/sprocketry
+  tag: "0.1.0"
+
+gcp:
+  projectId: my-project
+  # terraform output redis_ca_certificate
+  redisCaCertificate: |
+    -----BEGIN CERTIFICATE-----
+    MIIBexample
+    -----END CERTIFICATE-----
+
+gateway:
+  enabled: true
+  hostname: shop.example.com
+
+# Sign-in through Keycloak at /auth on the storefront's hostname. Serve the gateway over HTTPS before
+# shoppers use it: the realm refuses sign-in over plain HTTP from the internet (auth.sslRequired).
+auth:
+  enabled: true
+  storefrontUrl: https://shop.example.com
+  keycloakUrl: https://shop.example.com/auth
+  keycloakPath: /auth
+
+# Traces, metrics and logs into an in-cluster Grafana (make grafana).
+observability:
+  collector:
+    enabled: true
+  lgtm:
+    enabled: true
+
+# Canary releases (Argo Rollouts), judged on the in-cluster Prometheus, and runtime fault flags (flagd).
+rollouts:
+  enabled: true
+flags:
+  enabled: true

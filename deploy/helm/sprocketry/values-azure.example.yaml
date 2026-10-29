@@ -1,4 +1,6 @@
 # Copy to values-azure.yaml and fill from `terraform output` in infra/azure/envs/dev.
+cloud: azure
+
 image:
   registry: acrsprocketrydevxxxxx.azurecr.io
   tag: "0.1.0"

@@ -6,7 +6,8 @@ image:
   pullPolicy: IfNotPresent
 
 # Cloud provider that backs the Dapr components and the secret store.
-# "azure" uses the managed services below; "local" runs Postgres and Valkey in the cluster (see values-local.yaml).
+# "azure", "aws" and "gcp" use that cloud's managed services (infra/<cloud>, settings below);
+# "local" runs Postgres and Valkey in the cluster (see values-local.yaml).
 cloud: azure
 
 # Only used when cloud is "local".
@@ -26,7 +27,23 @@ azure:
   serviceBusNamespace: ""  # terraform output servicebus_namespace
   appsClientId: ""         # terraform output workload_identity_client_ids["apps"]
 
-# Kubernetes Secret that External Secrets fills from Key Vault.
+# Only used when cloud is "aws". EKS Pod Identity gives the services their IAM roles, so no IDs are needed.
+aws:
+  region: ""               # terraform output region
+  # RDS creates only the first database, and Terraform can't reach the private server to add more, so
+  # a Job in the cluster creates these (templates/aws-databases.yaml).
+  databases: [shipping, reviews, profile, keycloak]
+
+# Only used when cloud is "gcp". Workload Identity Federation grants IAM to the service accounts directly.
+gcp:
+  projectId: ""            # terraform output project_id
+  # Memorystore only accepts TLS, from a CA of its own: terraform output redis_ca_certificate.
+  redisCaCertificate: ""
+  # Encrypt without verifying the server instead, if its certificate can't be checked.
+  redisSkipTlsVerify: false
+
+# Kubernetes Secret that External Secrets fills from the cloud's secret store (Key Vault, AWS Secrets
+# Manager or Google Secret Manager), where Terraform writes a secret under each of these names.
 secretName: sprocketry-secrets
 secretRefreshInterval: 1h
 secrets:
@@ -167,6 +184,8 @@ services:
     writablePaths: [/app/.next/cache]
     # Signs shoppers in through Keycloak when auth.enabled.
     oidcClient: true
+    # Uses the Dapr state store (sign-in sessions).
+    stateStore: true
   catalog:
     port: 8080
     latencyObjectiveMs: 250
@@ -179,6 +198,8 @@ services:
   cart:
     port: 8080
     latencyObjectiveMs: 250
+    # Uses the Dapr state store (carts).
+    stateStore: true
     replicas: 2
     healthPath: /healthz
   shipping:
