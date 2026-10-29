@@ -1,0 +1,8 @@
+project_id = "my-sprocketry-dev"
+owner      = "you@example.com"
+region     = "europe-west2"
+zone       = "europe-west2-a"
+
+# IAM members of everyone who runs Terraform or deploys here, including the CI service account.
+# Yours: echo "user:$(gcloud config get-value account)"
+deployer_members = ["user:you@example.com"]
