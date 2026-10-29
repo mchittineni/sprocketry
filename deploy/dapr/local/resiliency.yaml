@@ -1,0 +1,16 @@
+# Bounds every state store call to 2 seconds, as on the cluster (deploy/helm/sprocketry/templates/dapr.yaml):
+# without it, cart waits more than 30 seconds while Valkey is unreachable.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: statestore
+spec:
+  policies:
+    timeouts:
+      stateOperation: 2s
+  targets:
+    components:
+      statestore:
+        outbound:
+          timeout: stateOperation
+scopes: [cart, storefront]
