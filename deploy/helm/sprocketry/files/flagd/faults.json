@@ -31,7 +31,20 @@
         "500ms": 500,
         "1500ms": 1500
       },
-      "defaultVariant": "off"
+      "defaultVariant": "off",
+      "targeting": {
+        "if": [
+          {
+            "starts_with": [
+              {
+                "var": "version"
+              },
+              "slow"
+            ]
+          },
+          "1500ms"
+        ]
+      }
     }
   }
 }

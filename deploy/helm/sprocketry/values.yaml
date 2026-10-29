@@ -137,6 +137,9 @@ rollouts:
     controllerNamespace: argo-rollouts
     # Highest share of the new version's requests that may fail (5xx).
     maxErrorRatio: "0.05"
+    # Highest share of the new version's requests that may be slower than the service's
+    # latencyObjectiveMs. Services without one are judged on errors only.
+    maxSlowRatio: "0.05"
     interval: 30s
 
 # Services with more than one replica get a PDB, so node drains (AKS auto-upgrades) evict one pod at a time.
@@ -149,6 +152,8 @@ gateway:
   namespace: gateway-system
   hostname: ""
 
+# latencyObjectiveMs is the latency threshold of the service's SLO (deploy/slo/specs); canary analysis
+# uses it to catch slow releases.
 services:
   storefront:
     port: 3000
@@ -164,6 +169,7 @@ services:
     oidcClient: true
   catalog:
     port: 8080
+    latencyObjectiveMs: 250
     replicas: 2
     healthPath: /healthz
     # Liveness uses healthPath; readiness uses readyPath when set. /readyz also checks the database.
@@ -172,16 +178,19 @@ services:
       DATABASE_URL: catalog-database-url
   cart:
     port: 8080
+    latencyObjectiveMs: 250
     replicas: 2
     healthPath: /healthz
   shipping:
     port: 8080
+    latencyObjectiveMs: 250
     replicas: 2
     healthPath: /healthz
     secretEnv:
       DATABASE_URL: shipping-database-url
   payment:
     port: 8080
+    latencyObjectiveMs: 1000
     replicas: 2
     healthPath: /healthz
     workloadIdentity: true
@@ -197,6 +206,7 @@ services:
   # The services below need auth.enabled: they check shoppers' Keycloak access tokens (oidc).
   reviews:
     port: 8080
+    latencyObjectiveMs: 250
     replicas: 2
     healthPath: /healthz
     readyPath: /readyz
@@ -206,6 +216,7 @@ services:
       DATABASE_URL: reviews-database-url
   profile:
     port: 8080
+    latencyObjectiveMs: 250
     replicas: 2
     healthPath: /healthz
     readyPath: /readyz

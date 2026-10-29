@@ -30,6 +30,32 @@ spec:
           query: |
             (sum(rate(dapr_http_client_completed_count_total{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}",status=~"5.."}[1m])) or vector(0))
             / (sum(rate(dapr_http_client_completed_count_total{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[1m])) > 0)
+---
+# Judges a canary by the share of its own requests slower than its service's latency objective (the
+# threshold in deploy/slo/specs), so a release that is slow but doesn't fail is rolled back too.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-latency
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: app
+    - name: canary-hash
+    - name: latency-ms
+  metrics:
+    - name: slow-ratio
+      interval: {{ $analysis.interval }}
+      successCondition: len(result) == 0 || result[0] <= {{ $analysis.maxSlowRatio }}
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: {{ $prometheus }}
+          query: |
+            (sum(rate(dapr_http_client_roundtrip_latency_count{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[1m]))
+              - sum(rate(dapr_http_client_roundtrip_latency_bucket{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}",le="{{ "{{args.latency-ms}}" }}"}[1m])))
+            / (sum(rate(dapr_http_client_roundtrip_latency_count{app_id="{{ "{{args.app}}" }}",rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[1m])) > 0)
 {{- if and .Values.networkPolicy.enabled .Values.observability.lgtm.enabled (not $analysis.prometheusUrl) }}
 ---
 # The Argo Rollouts controller queries the in-cluster Prometheus.
