@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Rehearses canary releases of payment on the kind cluster (make kind-up):
-#   1. a bad release: an image tagged "faulty", which the shipped fault flags fail on every checkout.
+#   1. a failing release: an image tagged "faulty", which the shipped fault flags fail on every checkout.
 #      The canary analysis sees its errors and Argo Rollouts rolls it back on its own.
-#   2. reverting it, as you would revert the commit: back to the stable version at once.
+#   2. a slow release: an image tagged "slow", which the flags delay by 1.5s, over payment's 1s latency
+#      objective. It returns no errors, and the analysis rolls it back on latency.
+#   After each, a revert, as you would revert the commit: back to the stable version at once.
 #   3. a good release, which steps through the canary weights and is promoted.
-# Checkouts run throughout, sent from the storefront's sidecar. Takes about ten minutes.
+# Checkouts run throughout, sent from the storefront's sidecar. Takes about fifteen minutes.
 set -euo pipefail
 
 CLUSTER=${CLUSTER:-sprocketry}
@@ -31,7 +33,7 @@ release() {
 }
 
 # Checkouts of carts that don't exist: the stable version refuses them (400, not an error), so no stock
-# is used up, while a faulty version fails them (502) before it looks at the cart.
+# is used up, while a faulty version fails them (502) and a slow one delays them, before it looks at the cart.
 storefront=$(k get pod -l app.kubernetes.io/name=storefront -o name | head -1)
 # kubectl directly, not through k(), so $! is kubectl itself and the trap below stops it. The storefront
 # image is distroless: node is at /nodejs/bin/node.
@@ -48,14 +50,16 @@ kubectl -n "$NAMESPACE" exec "$storefront" -c storefront -- /nodejs/bin/node -e 
 traffic=$!
 trap 'kill $traffic 2>/dev/null || true' EXIT
 
-release faulty
-wait_phase Degraded
-echo "    rolled back: $(k get rollout payment -o jsonpath='{.status.message}')"
-k get analysisrun --sort-by=.metadata.creationTimestamp -o custom-columns=ANALYSIS:.metadata.name,PHASE:.status.phase,MESSAGE:.status.message | tail -1
-
-echo "==> Reverting to payment:$STABLE"
-helm upgrade sprocketry "$CHART" -n "$NAMESPACE" --reuse-values --set "services.payment.tag=$STABLE" >/dev/null
-wait_phase Healthy
+bad_release() {
+  release "$1"
+  wait_phase Degraded
+  echo "    rolled back: $(k get rollout payment -o jsonpath='{.status.message}')"
+  echo "==> Reverting to payment:$STABLE"
+  helm upgrade sprocketry "$CHART" -n "$NAMESPACE" --reuse-values --set "services.payment.tag=$STABLE" >/dev/null
+  wait_phase Healthy
+}
+bad_release faulty
+bad_release slow
 
 release "canary-demo-$(date +%s)"
 # Healthy until the controller notices the new version, so wait for the release to start first.
