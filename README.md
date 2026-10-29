@@ -135,15 +135,37 @@ Data lives in `emptyDir` volumes, so it resets when the Postgres or Valkey pods 
 
 With `rollouts.enabled`, each service is an [Argo Rollouts](https://argoproj.github.io/rollouts/) Rollout instead of a Deployment. A new version takes 25% of the service's pods, then 50%, two minutes each, then all of them. There is no traffic router: Dapr spreads calls over every pod of a service, so the weight is the share of pods running the new version (at least one).
 
-For the whole release an analysis queries Prometheus for the share of the new pods' requests that fail with a 5xx, counted by their Dapr sidecars. Above 5% on two measurements, Argo Rollouts aborts the release and scales the new version away, while the old one keeps serving. A window with no requests to the new pods passes, since there is nothing to judge. The storefront has no analysis: browsers reach it directly, not through its sidecar, so its sidecar counts no requests. Its releases step through the weights unchecked.
+For the whole release an analysis queries Prometheus about the new pods' requests, counted by their Dapr sidecars: the share that fail with a 5xx, and the share slower than the service's latency objective (`latencyObjectiveMs`, the threshold of its SLO). If either is above 5% on two measurements, Argo Rollouts aborts the release and scales the new version away, while the old one keeps serving. A window with no requests to the new pods passes, since there is nothing to judge. The storefront has no analysis: browsers reach it directly, not through its sidecar, so its sidecar counts no requests. Its releases step through the weights unchecked.
 
 ```bash
-make canary-demo   # about ten minutes, with checkouts running throughout
+make canary-demo   # about fifteen minutes, with checkouts running throughout
 ```
 
-The demo releases a payment image tagged `faulty`, which the shipped fault flags fail on every checkout, and the analysis rolls it back. It then reverts, as you would revert the commit, and releases a good version, which is promoted. `kubectl argo rollouts get rollout payment -n sprocketry --watch` shows a release step by step, if you have the [kubectl plugin](https://argoproj.github.io/argo-rollouts/installation/#kubectl-plugin-installation).
+The demo releases a payment image tagged `faulty`, which the shipped fault flags fail on every checkout, and one tagged `slow`, which they delay by 1.5s without failing. The analysis rolls back both. After each it reverts, as you would revert the commit, and finally it releases a good version, which is promoted. `kubectl argo rollouts get rollout payment -n sprocketry --watch` shows a release step by step, if you have the [kubectl plugin](https://argoproj.github.io/argo-rollouts/installation/#kubectl-plugin-installation).
 
 Switching an existing install to Rollouts replaces each Deployment with a Rollout, so the services restart once.
+
+### Chaos experiments
+
+[Chaos Mesh](https://chaos-mesh.org) experiments in [deploy/chaos](deploy/chaos) test how the app behaves when part of it breaks. Each file states a hypothesis, and `scripts/chaos.sh` checks it: it measures the steady state, injects the fault, probes while it lasts, and checks the recovery. It exits non-zero when the hypothesis doesn't hold, and removes the fault when it exits.
+
+```bash
+make chaos                                  # list the experiments and their hypotheses
+make chaos EXPERIMENT=cart-pod-kill         # run one (installs Chaos Mesh on first use)
+```
+
+| Experiment | Fault | What it checks |
+|---|---|---|
+| `cart-pod-kill` | Kills the cart pod | Carts survive in Valkey, and cart answers again within a minute |
+| `cart-valkey-partition` | Cuts cart off from Valkey for 45s | Cart fails within 10s instead of hanging, and recovers without a restart |
+| `shipping-latency` | Adds 1.2s to shipping's network | Checkouts slow down, and payment's latency SLO page alert fires within ten minutes |
+
+Two experiments refuted their hypotheses the first time, and both findings are fixed:
+
+- **`cart-valkey-partition`:** with Valkey unreachable, cart waited more than 30 seconds for an answer. A Dapr [Resiliency](https://docs.dapr.io/operations/resiliency/) policy now limits every state store call to 2 seconds, for cart and the storefront's sessions, so cart answers with an error instead and recovers as soon as Valkey is back.
+- **`shipping-latency`:** the latency page never fired, because checkouts didn't slow down; they failed. Shipping's probes used Kubernetes' default 1-second timeout, so the kubelet restarted a healthy but slow shipping five times, and payment's quotes failed while it was down. The probes now allow 3 seconds (liveness 5 seconds, three times), so a slow service stays up and the latency alert fires after about a minute. The experiment now also checks that checkouts succeed and that shipping isn't restarted.
+
+They run against the kind cluster only. On a shared cluster, agree the blast radius first: these act on every pod the selector matches.
 
 ## Sign-in
 
@@ -317,6 +339,7 @@ deploy/helm/            app chart: deployments, Dapr components, ExternalSecret,
 deploy/dapr/local/      Dapr components for docker compose
 deploy/dapr/local-config/  Dapr sidecar configuration (tracing, metrics) for docker compose
 deploy/slo/             SLO specs (Sloth) and their alert tests; `make slo` generates the Prometheus rules
+deploy/chaos/           Chaos Mesh experiments, run and checked by scripts/chaos.sh
 deploy/observability/   OpenTelemetry Collector and Grafana provisioning for docker compose
 deploy/helm/sprocketry/values-local.yaml   values for a local cluster (cloud: local)
 deploy/kind/            kind cluster config
@@ -325,7 +348,7 @@ deploy/gateway/         Gateway API entry point
 infra/azure/modules/    network, aks, postgres, redis, servicebus, keyvault, workload-identity
 infra/azure/envs/dev/   dev environment composition
 loadgen/                k6 scenarios
-scripts/                doctor, kind-up, e2e, fault flags, canary demo and one-time Azure bootstrap scripts
+scripts/                doctor, kind-up, e2e, fault flags, canary demo, chaos and one-time Azure bootstrap scripts
 ```
 
 ## Roadmap
@@ -334,7 +357,7 @@ scripts/                doctor, kind-up, e2e, fault flags, canary demo and one-t
 - [x] OpenTelemetry Collector and Grafana LGTM stack
 - [x] SLOs as code and burn-rate alerts
 - [x] Argo Rollouts canary releases, OpenFeature + flagd for runtime fault toggles
-- [ ] Chaos Mesh experiments
+- [x] Chaos Mesh experiments
 - [ ] Kyverno policies, image signing with Cosign, SBOMs
 - [ ] `assistant` service: RAG over the catalog with pgvector
 - [ ] AWS (`infra/aws`) and GCP (`infra/gcp`), which need only new Dapr components and Terraform
