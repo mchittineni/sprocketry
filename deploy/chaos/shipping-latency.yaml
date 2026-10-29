@@ -1,0 +1,19 @@
+# Hypothesis: when shipping slows down, checkouts slow down with it, payment's latency SLO burns, and its
+# page alert fires within ten minutes, so on-call hears about a slow dependency.
+# Run with: scripts/chaos.sh shipping-latency
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: shipping-latency
+  namespace: sprocketry
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [sprocketry]
+    labelSelectors:
+      app.kubernetes.io/name: shipping
+  delay:
+    latency: 1200ms
+    jitter: 100ms
+  duration: 15m

@@ -1,0 +1,23 @@
+# Hypothesis: while cart's pod can't reach Valkey, cart answers with an error within 10 seconds rather than
+# hanging, and it recovers on its own, without a restart, once the network heals.
+# Run with: scripts/chaos.sh cart-valkey-partition
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: cart-valkey-partition
+  namespace: sprocketry
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: [sprocketry]
+    labelSelectors:
+      app.kubernetes.io/name: cart
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: [sprocketry]
+      labelSelectors:
+        app.kubernetes.io/name: valkey
+  duration: 45s
