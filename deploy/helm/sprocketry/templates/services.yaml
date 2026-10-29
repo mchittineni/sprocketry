@@ -34,12 +34,19 @@ spec:
       analysis:
         templates:
           - templateName: canary-error-ratio
+          {{- if $svc.latencyObjectiveMs }}
+          - templateName: canary-latency
+          {{- end }}
         args:
           - name: app
             value: {{ $name }}
           - name: canary-hash
             valueFrom:
               podTemplateHashValue: Latest
+          {{- with $svc.latencyObjectiveMs }}
+          - name: latency-ms
+            value: {{ . | quote }}
+          {{- end }}
       {{- end }}
       steps:
         {{- toYaml $.Values.rollouts.steps | nindent 8 }}
