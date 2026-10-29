@@ -1,0 +1,15 @@
+# Hypothesis: carts live in the state store (Valkey), not in the cart pod, so killing the pod loses no
+# cart, and cart answers again within a minute once its replacement starts.
+# Run with: scripts/chaos.sh cart-pod-kill
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: cart-pod-kill
+  namespace: sprocketry
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [sprocketry]
+    labelSelectors:
+      app.kubernetes.io/name: cart
