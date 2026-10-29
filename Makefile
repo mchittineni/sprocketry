@@ -1,4 +1,4 @@
-.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e fault grafana slo slo-test test test-docker kind-up canary-demo kind-down azure-destroy tf-validate helm-lint
+.PHONY: help doctor up up-prebuilt rebuild down logs smoke e2e fault grafana slo slo-test test test-docker kind-up canary-demo chaos kind-down azure-destroy tf-validate helm-lint
 .DEFAULT_GOAL := help
 
 TF_DIR := infra/azure/envs/dev
@@ -109,6 +109,9 @@ kind-up: ## Run the app on a local kind cluster (storefront on http://localhost:
 
 canary-demo: ## Release a faulty payment to the kind cluster and watch Argo Rollouts roll it back, then a good one
 	./scripts/canary-demo.sh
+
+chaos: ## Run a chaos experiment on the kind cluster: make chaos EXPERIMENT=cart-pod-kill (no args lists them)
+	./scripts/chaos.sh $(EXPERIMENT)
 
 kind-down: ## Delete the kind cluster
 	kind delete cluster --name $(or $(CLUSTER),sprocketry)
