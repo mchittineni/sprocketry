@@ -99,3 +99,23 @@ spec:
 # cart keeps carts here, storefront keeps sign-in sessions.
 scopes: [cart, storefront]
 {{- end }}
+---
+# Without a timeout, a state store call waits as long as Redis takes to answer, and while Redis is
+# unreachable that is longer than a shopper waits: deploy/chaos/cart-valkey-partition showed cart hanging
+# for over 30 seconds. With it, cart answers with an error after 2 seconds and recovers once Redis is back.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: statestore
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  policies:
+    timeouts:
+      stateOperation: 2s
+  targets:
+    components:
+      statestore:
+        outbound:
+          timeout: stateOperation
+scopes: [cart, storefront]
