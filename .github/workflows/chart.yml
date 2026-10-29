@@ -54,11 +54,13 @@ jobs:
       - name: Lint Chart
         run: |
           helm lint "$CHART" -f "$CHART/values-azure.example.yaml"
+          helm lint "$CHART" -f "$CHART/values-aws.example.yaml"
+          helm lint "$CHART" -f "$CHART/values-gcp.example.yaml"
           helm lint "$CHART" -f "$CHART/values-local.yaml"
 
       - name: Validate Rendered Manifests
         run: |
-          for values in values-azure.example.yaml values-local.yaml; do
+          for values in values-azure.example.yaml values-aws.example.yaml values-gcp.example.yaml values-local.yaml; do
             echo "::group::$values"
             helm template sprocketry "$CHART" -n sprocketry -f "$CHART/$values" \
               | kubeconform -strict -summary -ignore-missing-schemas \
