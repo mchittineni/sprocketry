@@ -67,6 +67,126 @@ auth:
   secretStore: kubernetes
 # cart keeps carts here, storefront keeps sign-in sessions.
 scopes: [cart, storefront]
+{{- else if eq .Values.cloud "aws" }}
+---
+# Orders topic on SNS, delivered to fulfillment's SQS queue. Credentials are the pods' own: EKS Pod
+# Identity gives payment and fulfillment the role that may use these (infra/aws).
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  type: pubsub.aws.snssqs
+  version: v1
+  metadata:
+    # Dapr builds the topic's ARN from the region, so it's required.
+    - name: region
+      value: {{ required "aws.region is required" .Values.aws.region | quote }}
+    # Terraform creates the topic (orders), the queue (fulfillment, the consumer's app id) and the
+    # subscription between them.
+    - name: disableEntityManagement
+      value: "true"
+    # Terraform's redrive moves a message to this queue after the same number of failed deliveries.
+    - name: sqsDeadLettersQueueName
+      value: fulfillment-dlq
+    - name: messageReceiveLimit
+      value: "10"
+scopes: [payment, fulfillment]
+---
+# Carts on ElastiCache for Valkey. Credentials come from Secrets Manager via External Secrets.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      secretKeyRef:
+        name: {{ .Values.secretName }}
+        key: redis-host
+    - name: redisPassword
+      secretKeyRef:
+        name: {{ .Values.secretName }}
+        key: redis-password
+    - name: enableTLS
+      value: "true"
+auth:
+  secretStore: kubernetes
+# cart keeps carts here, storefront keeps sign-in sessions.
+scopes: [cart, storefront]
+{{- else if eq .Values.cloud "gcp" }}
+---
+# Orders topic on Google Pub/Sub. Credentials are the pods' own: Workload Identity Federation grants
+# payment publish on the topic and fulfillment subscribe on its subscription (infra/gcp).
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  type: pubsub.gcp.pubsub
+  version: v1
+  metadata:
+    - name: projectId
+      value: {{ required "gcp.projectId is required" .Values.gcp.projectId | quote }}
+    # Terraform creates the topic and the subscription Dapr expects: <consumerID>-<topic>, i.e.
+    # fulfillment-orders.
+    - name: disableEntityManagement
+      value: "true"
+scopes: [payment, fulfillment]
+---
+# Carts on Memorystore for Redis, which only accepts TLS. Credentials come from Secret Manager via External Secrets.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      secretKeyRef:
+        name: {{ .Values.secretName }}
+        key: redis-host
+    - name: redisPassword
+      secretKeyRef:
+        name: {{ .Values.secretName }}
+        key: redis-password
+    - name: enableTLS
+      value: "true"
+    {{- if .Values.gcp.redisSkipTlsVerify }}
+    # Encrypted, but the server is not verified: only for when its certificate can't be checked.
+    - name: insecureSkipTLSVerify
+      value: "true"
+    {{- end }}
+auth:
+  secretStore: kubernetes
+# cart keeps carts here, storefront keeps sign-in sessions.
+scopes: [cart, storefront]
+{{- if not .Values.gcp.redisSkipTlsVerify }}
+---
+# Memorystore's server certificate is signed by a per-instance CA that no system trusts. Dapr's Redis
+# component has no CA setting, but Go also trusts every certificate in SSL_CERT_DIR, so the sidecars of the
+# services with stateStore: true mount this CA there.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-ca
+  labels:
+    {{- include "sprocketry.labels" . | nindent 4 }}
+data:
+  redis-ca.pem: |
+    {{- required "gcp.redisCaCertificate is required (terraform output redis_ca_certificate), or set gcp.redisSkipTlsVerify" .Values.gcp.redisCaCertificate | nindent 4 }}
+{{- end }}
 {{- else if eq .Values.cloud "local" }}
 ---
 # Local cluster: the same component names backed by the in-cluster Valkey from local.yaml.
