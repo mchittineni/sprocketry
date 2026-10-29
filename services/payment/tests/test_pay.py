@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 
@@ -191,14 +192,24 @@ def test_without_flags_there_are_no_faults(client_with):
     assert resp.status_code == 200
 
 
-# The shipped flags: no faults by default, and every checkout fails on a version named faulty*, which
-# scripts/canary-demo.sh uses to release a bad canary.
-@pytest.mark.parametrize(("version", "status"), [("1.4.0", 200), ("faulty", 502), ("faulty-2", 502)])
-def test_shipped_flags(client_with, version, status):
+# The shipped flags: no faults by default; every checkout fails on a version named faulty* and is delayed
+# 1.5s on one named slow*, which scripts/canary-demo.sh uses to release bad canaries.
+@pytest.mark.parametrize(
+    ("version", "status", "delay"),
+    [("1.4.0", 200, None), ("faulty", 502, None), ("faulty-2", 502, None), ("slow", 200, 1.5), ("slow-3", 200, 1.5)],
+)
+def test_shipped_flags(client_with, monkeypatch, version, status, delay):
     if not FLAGS_FILE.exists():
         pytest.skip(f"{FLAGS_FILE} not found")
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
     provider = FlagdProvider(resolver_type=ResolverType.FILE, offline_flag_source_path=str(FLAGS_FILE))
     api.set_provider_and_wait(provider)
     api.set_evaluation_context(EvaluationContext(attributes={"version": version}))
 
     assert client_with(FakeDapr(CART)).post("/pay/c1", json=CHECKOUT).status_code == status
+    assert slept == ([delay] if delay else [])
