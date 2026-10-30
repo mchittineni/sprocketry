@@ -251,7 +251,7 @@ az login
 ./scripts/bootstrap-tfstate.sh                    # once: state storage + infra/azure/envs/dev/backend.hcl
 
 cd infra/azure/envs/dev
-cp terraform.tfvars.example terraform.tfvars      # set subscription_id, owner and deployer_principal_ids
+cp terraform.tfvars.example terraform.tfvars      # set subscription_id, owner, deployer_principal_ids and aks_api_authorized_cidrs
 terraform init -backend-config=backend.hcl
 terraform apply
 cd -
@@ -264,6 +264,7 @@ git add deploy/helm/sprocketry/values-azure.yaml && git commit -m "chore: azure 
 It installs pinned versions of External Secrets, Envoy Gateway and Argo CD. You can override each version with an environment variable at the top of the script.
 
 The cluster has no local admin account. kubectl signs in through Entra ID using your `az login`, which is why kubelogin is needed (`az aks install-cli` installs it).
+Only the CIDRs in `aks_api_authorized_cidrs` can reach the API server, so add your IP (and that of anything else that runs kubectl).
 Everyone in `deployer_principal_ids` gets cluster admin and can write Key Vault secrets. Add the CI service principal's object ID too, so that CI's `terraform plan` matches your applies.
 It finishes by printing the storefront's public URL.
 
@@ -283,6 +284,7 @@ Then set these repository variables:
 | `TFSTATE_RESOURCE_GROUP` | optional; defaults to `rg-terraform-state` |
 | `DEPLOYER_PRINCIPAL_IDS` | the same list as `deployer_principal_ids` in your tfvars, as JSON, e.g. `["<you>","<ci-sp>"]` |
 | `TF_OWNER` | the same value as `owner` in your tfvars; defaults to the repo owner |
+| `AKS_API_AUTHORIZED_CIDRS` | the same list as `aks_api_authorized_cidrs` in your tfvars, as JSON, e.g. `["203.0.113.10/32"]`; the plan fails without it |
 
 When these variables aren't set, the Azure steps are skipped instead of failing.
 
