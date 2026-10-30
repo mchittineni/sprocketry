@@ -31,6 +31,8 @@ override_module {
 variables {
   subscription_id = "44444444-4444-4444-4444-444444444444"
   owner           = "tests@example.com"
+
+  aks_api_authorized_cidrs = ["203.0.113.10/32"]
 }
 
 # ---------- Whole environment ----------

@@ -23,6 +23,11 @@ resource "azurerm_kubernetes_cluster" "this" {
     mode = "Manual"
   }
 
+  # The API server is public, so only these ranges may reach it; Entra ID still authenticates every call.
+  api_server_access_profile {
+    authorized_ip_ranges = var.api_server_authorized_ip_ranges
+  }
+
   automatic_upgrade_channel = "patch"
   node_os_upgrade_channel   = "NodeImage"
 
