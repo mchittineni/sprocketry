@@ -1,7 +1,7 @@
 # The build stage runs on the builder's own CPU, and the standalone server it produces is plain
 # JavaScript, so multi-arch builds need no emulation. (The optional sharp image library is never
 # loaded: next.config.ts disables image optimisation.)
-FROM --platform=$BUILDPLATFORM node:24-alpine AS build
+FROM --platform=$BUILDPLATFORM node:25-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
