@@ -38,6 +38,14 @@ variable "node_max_count" {
   default     = 3
 }
 
+variable "aks_api_authorized_cidrs" {
+  description = <<-EOT
+    CIDRs allowed to reach the AKS API from the internet: your IP and the egress range of anything that
+    runs kubectl. Requests still need an Entra identity with cluster access.
+  EOT
+  type        = list(string)
+}
+
 variable "deployer_principal_ids" {
   description = <<-EOT
     Entra object IDs of everyone who runs Terraform for this environment: people, groups and the CI

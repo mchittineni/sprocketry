@@ -51,6 +51,8 @@ module "aks" {
   tenant_id           = data.azurerm_client_config.current.tenant_id
   admin_principal_ids = local.deployers
   tags                = local.tags
+
+  api_server_authorized_ip_ranges = var.aks_api_authorized_cidrs
 }
 
 # ==================== Data ====================

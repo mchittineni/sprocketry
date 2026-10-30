@@ -58,6 +58,16 @@ variable "tenant_id" {
   type        = string
 }
 
+variable "api_server_authorized_ip_ranges" {
+  description = "CIDRs allowed to reach the API server. AKS treats an empty list as open to the internet, so one is required."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.api_server_authorized_ip_ranges) > 0
+    error_message = "List at least one CIDR, such as your IP and CI's egress range."
+  }
+}
+
 variable "admin_principal_ids" {
   description = "Entra object IDs granted cluster admin through Azure RBAC."
   type        = set(string)
