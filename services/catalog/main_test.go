@@ -19,6 +19,10 @@ func newTestServer(t *testing.T) (*httptest.Server, *pgxpool.Pool) {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
+		// CI always provides a database, so a missing one there is a broken pipeline, not a reason to pass.
+		if os.Getenv("CI") != "" {
+			t.Fatal("TEST_DATABASE_URL not set in CI")
+		}
 		t.Skip("TEST_DATABASE_URL not set; skipping database tests")
 	}
 	ctx := context.Background()
