@@ -91,7 +91,10 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: terraform
-    directory: /infra/azure/envs/dev
+    directories:
+      - /infra/aws/envs/dev
+      - /infra/azure/envs/dev
+      - /infra/gcp/envs/dev
     schedule:
       interval: monthly
     cooldown:
