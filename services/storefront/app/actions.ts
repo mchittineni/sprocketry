@@ -27,6 +27,8 @@ export async function addToCart(sku: string, name: string): Promise<Result> {
 }
 
 export async function setQuantity(sku: string, quantity: number): Promise<Result> {
+  // Server actions are public endpoints, so arguments are checked at runtime, not just by type.
+  if (!Number.isInteger(quantity) || quantity < 0 || quantity > 99) return { ok: false, message: 'Choose a quantity from 0 to 99.' };
   try {
     await call<Cart>('cart', `cart/${await cartId()}/items/${encodeURIComponent(sku)}`, {
       method: 'PUT',
@@ -41,6 +43,7 @@ export async function setQuantity(sku: string, quantity: number): Promise<Result
 }
 
 export async function getQuote(cityId: number): Promise<Quote | null> {
+  if (!Number.isInteger(cityId) || cityId <= 0) return null;
   try {
     return await call<Quote>('shipping', `quote/${cityId}`);
   } catch {
@@ -53,7 +56,7 @@ export type CheckoutState = { error?: string };
 export async function checkout(_prev: CheckoutState, formData: FormData): Promise<CheckoutState> {
   const id = await cartId();
   const cityId = Number(formData.get('city'));
-  if (!cityId) return { error: 'Choose where to ship your order.' };
+  if (!Number.isInteger(cityId) || cityId <= 0) return { error: 'Choose where to ship your order.' };
 
   // Orders belong to the signed-in shopper, or to the anonymous cart otherwise.
   const userId = (await getSession().catch(() => null))?.sub ?? id;

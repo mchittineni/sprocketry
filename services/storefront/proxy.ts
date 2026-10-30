@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { isCartId } from '@/lib/cart-id';
 
 // Pages that need a signed-in shopper. Checked here, before rendering, so a signed-out visitor gets a real
 // redirect: once a page starts streaming, Next.js can only redirect in the browser.
@@ -10,11 +11,18 @@ export function proxy(req: NextRequest) {
     login.searchParams.set('returnTo', req.nextUrl.pathname);
     return NextResponse.redirect(login);
   }
-  // Gives every visitor a cart id cookie on first request.
-  const res = NextResponse.next();
-  if (!req.cookies.has('cart_id')) {
-    res.cookies.set('cart_id', crypto.randomUUID(), { httpOnly: true, sameSite: 'lax', path: '/' });
-  }
+  // Gives every visitor a cart id cookie, replacing one that isn't a UUID, since it ends up in backend paths.
+  if (isCartId(req.cookies.get('cart_id')?.value)) return NextResponse.next();
+  const id = crypto.randomUUID();
+  // Set it on the request too, so this first render already sees the visitor's own cart.
+  req.cookies.set('cart_id', id);
+  const res = NextResponse.next({ request: { headers: req.headers } });
+  res.cookies.set('cart_id', id, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.STOREFRONT_URL?.startsWith('https:') ?? false,
+    path: '/',
+  });
   return res;
 }
 

@@ -10,7 +10,18 @@ describe('safeReturnTo', () => {
   });
 
   // Each of these would send the shopper to another site after signing in.
-  it.each(['https://evil.example/', '//evil.example', '/\\evil.example', 'evil', '', null, undefined])(
+  it.each([
+    'https://evil.example/',
+    '//evil.example',
+    '/\\evil.example',
+    '/\t/evil.example',
+    '/\n/evil.example',
+    '/\\\t\\evil.example',
+    'evil',
+    '',
+    null,
+    undefined,
+  ])(
     'replaces %s with the home page',
     (path) => {
       expect(safeReturnTo(path)).toBe('/');

@@ -56,8 +56,17 @@ function getConfig(): Promise<oidc.Configuration> {
 }
 
 /** Only same-site paths, so the login flow can't be used to redirect elsewhere. */
+// Prefix checks alone miss tricks like "/\t/evil.example": the URL parser drops tabs and newlines and
+// reads backslashes as slashes. So parse it as a browser would and keep it only if it stays on this site.
 export function safeReturnTo(value: string | null | undefined): string {
-  return value && value.startsWith('/') && !value.startsWith('//') && !value.startsWith('/\\') ? value : '/';
+  if (!value?.startsWith('/')) return '/';
+  const base = 'http://storefront.invalid';
+  try {
+    const url = new URL(value, base);
+    return url.origin === base ? url.pathname + url.search + url.hash : '/';
+  } catch {
+    return '/';
+  }
 }
 
 const secure = () => process.env.STOREFRONT_URL?.startsWith('https:') ?? false;
