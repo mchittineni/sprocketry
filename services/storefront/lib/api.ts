@@ -2,6 +2,7 @@
 // so the storefront never needs to know where other services run.
 import { cookies } from 'next/headers';
 import { getSession } from './auth';
+import { isCartId } from './cart-id';
 
 const DAPR = `http://localhost:${process.env.DAPR_HTTP_PORT ?? '3500'}/v1.0/invoke`;
 
@@ -40,7 +41,15 @@ export interface Destination {
   cities: { id: number; name: string }[];
 }
 
+// fetch resolves dot segments (also percent-encoded ones), so a path built from caller input could otherwise
+// climb out of /invoke/<app>/method and reach any sidecar API, such as secrets or publish.
+function checkPath(path: string) {
+  const segments = path.split('/').map((s) => s.replace(/%2e/gi, '.'));
+  if (/[?#\\]/.test(path) || segments.some((s) => s === '.' || s === '..')) throw new Error(`invalid path ${path}`);
+}
+
 export async function call<T>(app: string, path: string, init?: RequestInit): Promise<T> {
+  checkPath(path);
   const res = await fetch(`${DAPR}/${app}/method/${path}`, {
     cache: 'no-store',
     ...init,
@@ -86,9 +95,11 @@ export async function authedCall<T>(app: string, path: string, init?: RequestIni
   return call<T>(app, path, { ...init, headers: { ...init?.headers, authorization: `Bearer ${session.accessToken}` } });
 }
 
+/** The visitor's cart. The proxy issues a fresh id before rendering, so a missing or forged one is a bug. */
 export async function cartId(): Promise<string> {
-  const jar = await cookies();
-  return jar.get('cart_id')?.value ?? 'anonymous';
+  const id = (await cookies()).get('cart_id')?.value;
+  if (!isCartId(id)) throw new Error('missing or invalid cart_id cookie');
+  return id;
 }
 
 /** Every shipping destination, grouped by country. */

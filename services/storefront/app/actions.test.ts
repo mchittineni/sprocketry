@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => ({ value: 'cart-1' }) }) }));
+const CART = '6f1c2a1e-3b4d-4c5e-8f60-718293a4b5c6';
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => ({ value: CART }) }) }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
@@ -41,7 +42,7 @@ describe('addToCart', () => {
     expect(await addToCart('RB-002', 'Sweep Bot')).toEqual({ ok: true, message: 'Sweep Bot added to your cart' });
 
     const [url, init] = fetch.mock.calls[0];
-    expect(url).toMatch(/\/v1\.0\/invoke\/cart\/method\/cart\/cart-1\/items$/);
+    expect(url).toMatch(new RegExp(`/v1\\.0/invoke/cart/method/cart/${CART}/items$`));
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual({ sku: 'RB-002', quantity: 1 });
   });
@@ -63,7 +64,7 @@ describe('setQuantity', () => {
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0];
-    expect(url).toMatch(/\/cart\/cart-1\/items\/RB%202$/);
+    expect(url).toMatch(new RegExp(`/cart/${CART}/items/RB%202$`));
     expect(init?.method).toBe('PUT');
     expect(JSON.parse(String(init?.body))).toEqual({ quantity: 2 });
   });
@@ -72,6 +73,12 @@ describe('setQuantity', () => {
     backend(200);
     expect(await setQuantity('RB-002', 0)).toEqual({ ok: true, message: 'Item removed' });
   });
+
+  it.each([-1, 1.5, 100, Number.NaN])('refuses the quantity %s without calling the cart', async (quantity) => {
+    const fetch = backend(200);
+    expect((await setQuantity('RB-002', quantity)).ok).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
 
 describe('getQuote', () => {
@@ -79,6 +86,16 @@ describe('getQuote', () => {
     backend(503);
     expect(await getQuote(1)).toBeNull();
   });
+
+  // A server action can be called with any argument, and fetch would resolve "..", reaching other sidecar APIs.
+  it.each(['../../../../metadata', '1/../../../secrets/store/key', 0, -3, 2.5])(
+    'refuses %s without calling the sidecar',
+    async (cityId) => {
+      const fetch = backend(200, { cost: 1 });
+      expect(await getQuote(cityId as number)).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('checkout', () => {
@@ -91,7 +108,7 @@ describe('checkout', () => {
   it('redirects to the order page once paid', async () => {
     const fetch = backend(200, { order_id: 'o1', total: 716.1, shipping: 18.1 });
     await expect(checkout({}, form({ city: '1' }))).rejects.toThrow('NEXT_REDIRECT /order/o1?total=716.1&shipping=18.1');
-    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ user_id: 'cart-1', city_id: 1 });
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ user_id: CART, city_id: 1 });
   });
 
   it('says nothing was charged when payment is declined', async () => {
