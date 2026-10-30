@@ -52,11 +52,12 @@ app.MapPut("/cart/{id}/items/{sku}", async (string id, string sku, SetQuantity r
 app.MapDelete("/cart/{id}/items/{sku}", async (string id, string sku, IHttpClientFactory http) =>
     await UpdateCart(http.CreateClient("dapr"), stateStore, id, cart => TypedResults.Ok(RemoveLine(cart, sku))));
 
+// Empties the cart rather than deleting its key: the version must keep rising across checkouts, or the
+// shopper's next cart would repeat an earlier version and payment would reuse that order's ID.
 app.MapDelete("/cart/{id}", async (string id, IHttpClientFactory http) =>
 {
-    var resp = await http.CreateClient("dapr").DeleteAsync($"/v1.0/state/{stateStore}/{Uri.EscapeDataString(id)}");
-    resp.EnsureSuccessStatusCode();
-    return Results.NoContent();
+    var result = await UpdateCart(http.CreateClient("dapr"), stateStore, id, cart => TypedResults.Ok(cart with { Items = [] }));
+    return result is Ok<Cart> ? Results.NoContent() : result;
 });
 
 app.Run($"http://0.0.0.0:{Environment.GetEnvironmentVariable("PORT") ?? "8080"}");
@@ -132,8 +133,8 @@ sealed record SetQuantity(int Quantity);
 sealed record Product(string Sku, string Name, decimal Price, int Stock);
 sealed record CartItem(string Sku, string Name, decimal Price, int Quantity);
 
-// Version increases on every save. Payment derives the order ID from it, so paying twice for the same
-// cart contents places one order.
+// Version increases on every save and never resets, even when the cart is emptied after checkout. Payment
+// derives the order ID from it, so paying twice for the same cart contents places one order.
 sealed record Cart(string Id, List<CartItem> Items, int Version = 0)
 {
     public decimal Total => Items.Sum(i => i.Price * i.Quantity);

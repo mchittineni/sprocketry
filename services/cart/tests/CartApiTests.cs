@@ -220,6 +220,18 @@ public class CartApiTests : IDisposable
         Assert.Empty((await Get()).Items);
     }
 
+    // Payment's order ID comes from the cart version, so a cart refilled after checkout must not repeat one.
+    [Fact]
+    public async Task VersionKeepsRisingAfterCheckoutEmptiesCart()
+    {
+        await Add("RB-002", 1);
+        var paid = (await Get()).Version;
+        await client.DeleteAsync("/cart/c1", Ct);
+        await Add("RB-002", 1);
+
+        Assert.True((await Get()).Version > paid);
+    }
+
     // A write that lands between this request's read and save must not be overwritten.
     [Fact]
     public async Task ConcurrentChangeIsRetriedNotLost()
