@@ -28,6 +28,8 @@ env:
   # Both must match terraform.tfvars, or the plan shows changes nobody made.
   TF_VAR_owner: ${{ vars.TF_OWNER || github.repository_owner }}
   TF_VAR_deployer_principal_ids: ${{ vars.DEPLOYER_PRINCIPAL_IDS || '[]' }}
+  # Unset, the plan stops at the AKS module's validation: the API server needs at least one range.
+  TF_VAR_aks_api_authorized_cidrs: ${{ vars.AKS_API_AUTHORIZED_CIDRS || '[]' }}
 
 jobs:
   # Offline checks for every cloud: no credentials, nothing created.
