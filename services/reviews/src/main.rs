@@ -338,7 +338,12 @@ mod tests {
 
     /// A freshly migrated database, or None to skip: the tests wipe it, so it must be disposable.
     async fn test_db() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgPool)> {
-        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        // CI always provides a database, so a missing one there is a broken pipeline, not a reason to pass.
+        let url = match std::env::var("TEST_DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) if std::env::var_os("CI").is_some() => panic!("TEST_DATABASE_URL not set in CI"),
+            Err(_) => return None,
+        };
         let guard = DB_LOCK.lock().await;
         let db = PgPool::connect(&url).await.unwrap();
         sqlx::raw_sql("DROP TABLE IF EXISTS reviews")
