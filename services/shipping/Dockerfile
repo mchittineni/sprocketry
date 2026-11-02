@@ -1,7 +1,7 @@
 # The build stage runs on the builder's own CPU. Every dependency is plain JavaScript (pg without
 # pg-native), so its output runs on any CPU and multi-arch builds need no emulation.
 # The service is an ES module (NestJS 12 is ESM-only), so package.json ships with dist/ for "type": "module".
-FROM --platform=$BUILDPLATFORM node:24-alpine AS build
+FROM --platform=$BUILDPLATFORM node:25-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
